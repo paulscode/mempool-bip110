@@ -50,12 +50,21 @@ export const TransactionFlags = {
   coinjoin:                0b00000001_00000000_00000000_00000000_00000000n,
   consolidation:           0b00000010_00000000_00000000_00000000_00000000n,
   batch_payout:            0b00000100_00000000_00000000_00000000_00000000n,
-  // sighash
-  sighash_all:    0b00000001_00000000_00000000_00000000_00000000_00000000n,
-  sighash_none:   0b00000010_00000000_00000000_00000000_00000000_00000000n,
-  sighash_single: 0b00000100_00000000_00000000_00000000_00000000_00000000n,
-  sighash_default:0b00001000_00000000_00000000_00000000_00000000_00000000n,
-  sighash_acp:    0b00010000_00000000_00000000_00000000_00000000_00000000n,
+  // BIP110 'Reduced Data Temporary Softfork' violations (per bip-0110.mediawiki Specification)
+  // Using bits 35-41 - within JS 53-bit safe integer range
+  bip110_large_scriptpubkey:   0b00001000_00000000_00000000_00000000_00000000n, // bit 35 - Rule 1: scriptPubKey > 34 bytes (OP_RETURN up to 83)
+  bip110_large_pushdata:       0b00010000_00000000_00000000_00000000_00000000n, // bit 36 - Rule 2: PUSHDATA*/witness > 256 bytes (except BIP16 redeemScript)
+  bip110_undefined_witness:    0b00100000_00000000_00000000_00000000_00000000n, // bit 37 - Rule 3: Undefined witness version (not v0/v1/P2A)
+  bip110_taproot_annex:        0b01000000_00000000_00000000_00000000_00000000n, // bit 38 - Rule 4: Taproot annex present
+  bip110_large_control_block:  0b10000000_00000000_00000000_00000000_00000000n, // bit 39 - Rule 5: Control block > 257 bytes (128 script leaves)
+  bip110_op_success:  0b00000001_00000000_00000000_00000000_00000000_00000000n, // bit 40 - Rule 6: OP_SUCCESS* in tapscript (even unexecuted)
+  bip110_op_if_notif: 0b00000010_00000000_00000000_00000000_00000000_00000000n, // bit 41 - Rule 7: OP_IF/OP_NOTIF executing in tapscript
+  // sighash (bits 42-46)
+  sighash_all:        0b00000100_00000000_00000000_00000000_00000000_00000000n, // bit 42
+  sighash_none:       0b00001000_00000000_00000000_00000000_00000000_00000000n, // bit 43
+  sighash_single:     0b00010000_00000000_00000000_00000000_00000000_00000000n, // bit 44
+  sighash_default:    0b00100000_00000000_00000000_00000000_00000000_00000000n, // bit 45
+  sighash_acp:        0b01000000_00000000_00000000_00000000_00000000_00000000n, // bit 46
 };
 
 export function toFlags(filters: string[]): bigint {
@@ -112,6 +121,14 @@ export const TransactionFilters: { [key: string]: Filter } = {
     sighash_single: { key: 'sighash_single', label: 'sighash_single', flag: TransactionFlags.sighash_single, tooltip: true },
     sighash_default: { key: 'sighash_default', label: 'sighash_default', flag: TransactionFlags.sighash_default },
     sighash_acp: { key: 'sighash_acp', label: 'sighash_anyonecanpay', flag: TransactionFlags.sighash_acp, tooltip: true },
+    /* BIP110 violations */
+    bip110_large_scriptpubkey: { key: 'bip110_large_scriptpubkey', label: 'BIP110: Large scriptPubKey (>34 bytes)', flag: TransactionFlags.bip110_large_scriptpubkey, important: true, tooltip: true, txPage: true },
+    bip110_large_pushdata: { key: 'bip110_large_pushdata', label: 'BIP110: Large push data (>256 bytes)', flag: TransactionFlags.bip110_large_pushdata, important: true, tooltip: true, txPage: true },
+    bip110_undefined_witness: { key: 'bip110_undefined_witness', label: 'BIP110: Undefined witness version', flag: TransactionFlags.bip110_undefined_witness, important: true, tooltip: true, txPage: true },
+    bip110_taproot_annex: { key: 'bip110_taproot_annex', label: 'BIP110: Taproot annex present', flag: TransactionFlags.bip110_taproot_annex, important: true, tooltip: true, txPage: true },
+    bip110_large_control_block: { key: 'bip110_large_control_block', label: 'BIP110: Large control block (>257 bytes)', flag: TransactionFlags.bip110_large_control_block, important: true, tooltip: true, txPage: true },
+    bip110_op_success: { key: 'bip110_op_success', label: 'BIP110: OP_SUCCESS opcode', flag: TransactionFlags.bip110_op_success, important: true, tooltip: true, txPage: true },
+    bip110_op_if_notif: { key: 'bip110_op_if_notif', label: 'BIP110: OP_IF/OP_NOTIF in tapscript', flag: TransactionFlags.bip110_op_if_notif, important: true, tooltip: true, txPage: true },
 };
 
 export const FilterGroups: { label: string, filters: Filter[]}[] = [
@@ -121,4 +138,5 @@ export const FilterGroups: { label: string, filters: Filter[]}[] = [
   { label: $localize`Data`, filters: ['op_return', 'fake_pubkey', 'fake_scripthash', 'inscription'] },
   { label: $localize`Heuristics`, filters: ['coinjoin', 'consolidation', 'batch_payout'] },
   { label: $localize`Sighash Flags`, filters: ['sighash_all', 'sighash_none', 'sighash_single', 'sighash_default', 'sighash_acp'] },
+  { label: $localize`BIP110 Violations`, filters: ['bip110_large_scriptpubkey', 'bip110_large_pushdata', 'bip110_undefined_witness', 'bip110_taproot_annex', 'bip110_large_control_block', 'bip110_op_success', 'bip110_op_if_notif'] },
 ].map(group => ({ label: group.label, filters: group.filters.map(filter => TransactionFilters[filter] || null).filter(f => f != null) }));

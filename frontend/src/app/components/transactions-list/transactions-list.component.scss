@@ -187,3 +187,80 @@ h2 {
 		background-color: var(--primary);
 	}
 }
+
+// BIP110 Violation Styles
+.tx-header-right {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.badge-bip110-violation {
+	background: linear-gradient(135deg, #ff6b00 0%, #ff8c00 50%, #ff6b00 100%);
+	color: #000;
+	font-weight: bold;
+	padding: 4px 8px;
+	border-radius: 4px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	animation: bip110-badge-pulse 2s ease-in-out infinite;
+	box-shadow: 0 0 8px rgba(255, 107, 0, 0.6);
+}
+
+.bip110-violation-container {
+	border-left: 3px solid #ff6b00 !important;
+	background: linear-gradient(90deg, rgba(255, 107, 0, 0.1) 0%, transparent 30%) !important;
+}
+
+.bip110-violation-box {
+	border: 2px solid #ff6b00 !important;
+	box-shadow: 0 0 15px rgba(255, 107, 0, 0.4), inset 0 0 30px rgba(255, 107, 0, 0.05);
+	animation: bip110-box-glow 3s ease-in-out infinite;
+}
+
+.alert-bip110 {
+	background: linear-gradient(135deg, rgba(255, 107, 0, 0.2) 0%, rgba(255, 140, 0, 0.15) 100%);
+	border: 1px solid #ff6b00;
+	border-left: 4px solid #ff6b00;
+	color: #ffcc99;
+	padding: 10px 15px;
+	margin-bottom: 15px;
+	border-radius: 4px;
+	
+	strong {
+		color: #ff6b00;
+	}
+}
+
+.bip110-tooltip {
+	text-align: left;
+	min-width: 200px;
+	
+	ul {
+		margin: 5px 0 0 0;
+		padding-left: 20px;
+		
+		li {
+			margin: 2px 0;
+		}
+	}
+}
+
+@keyframes bip110-badge-pulse {
+	0%, 100% {
+		box-shadow: 0 0 8px rgba(255, 107, 0, 0.6);
+	}
+	50% {
+		box-shadow: 0 0 15px rgba(255, 107, 0, 0.9), 0 0 25px rgba(255, 107, 0, 0.4);
+	}
+}
+
+@keyframes bip110-box-glow {
+	0%, 100% {
+		box-shadow: 0 0 15px rgba(255, 107, 0, 0.4), inset 0 0 30px rgba(255, 107, 0, 0.05);
+	}
+	50% {
+		box-shadow: 0 0 25px rgba(255, 107, 0, 0.6), inset 0 0 40px rgba(255, 107, 0, 0.1);
+	}
+}

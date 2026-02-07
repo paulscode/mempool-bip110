@@ -263,14 +263,17 @@ class TransactionUtils {
         i++;
         let push: number;
         if (op === 0x4c) {
+          if (i + 1 > buf.length) break;
           push = buf.readUInt8(i);
           b.push('OP_PUSHDATA1');
           i += 1;
         } else if (op === 0x4d) {
+          if (i + 2 > buf.length) break;
           push = buf.readUInt16LE(i);
           b.push('OP_PUSHDATA2');
           i += 2;
         } else if (op === 0x4e) {
+          if (i + 4 > buf.length) break;
           push = buf.readUInt32LE(i);
           b.push('OP_PUSHDATA4');
           i += 4;

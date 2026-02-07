@@ -2,7 +2,7 @@ import { FastVertexArray } from '@components/block-overview-graph/fast-vertex-ar
 import TxView from '@components/block-overview-graph/tx-view';
 import { TransactionStripped } from '@interfaces/node-api.interface';
 import { Color, Position, Square, ViewUpdateParams } from '@components/block-overview-graph/sprite-types';
-import { defaultColorFunction, contrastColorFunction } from '@components/block-overview-graph/utils';
+import { defaultColorFunction, contrastColorFunction, hasBIP110Violation } from '@components/block-overview-graph/utils';
 import { ThemeService } from '@app/services/theme.service';
 
 export default class BlockScene {
@@ -106,7 +106,8 @@ export default class BlockScene {
       this.applyTxUpdate(txView, {
         display: {
           position: txView.screenPosition,
-          color: this.getColor(txView)
+          color: this.getColor(txView),
+          bip110: hasBIP110Violation(txView) ? 1 : 0
         },
         duration: 0
       });
@@ -315,6 +316,7 @@ export default class BlockScene {
   private setTxOnScreen(tx: TxView, startTime: number, delay: number = 50, direction: string = 'left', animate: boolean = true): void {
     if (!tx.initialised) {
       const txColor = this.getColor(tx);
+      const bip110Flag = hasBIP110Violation(tx) ? 1 : 0;
       this.applyTxUpdate(tx, {
         display: {
           position: {
@@ -323,6 +325,7 @@ export default class BlockScene {
             s: tx.screenPosition.s
           },
           color: txColor,
+          bip110: bip110Flag,
         },
         start: startTime,
         delay: 0,
@@ -330,7 +333,8 @@ export default class BlockScene {
       this.applyTxUpdate(tx, {
         display: {
           position: tx.screenPosition,
-          color: txColor
+          color: txColor,
+          bip110: bip110Flag
         },
         duration: animate ? this.animationDuration : 1,
         start: startTime,

@@ -1,11 +1,24 @@
 <div infiniteScroll [alwaysCallback]="true" [infiniteScrollDistance]="2" [infiniteScrollUpDistance]="1.5" [infiniteScrollThrottle]="50" (scrolled)="onScroll()">
 
 <ng-container *ngFor="let tx of transactions; let i = index; trackBy: trackByFn">
-  <div *ngIf="!transactionPage" class="header-bg box tx-page-container">
+  <div *ngIf="!transactionPage" class="header-bg box tx-page-container" [class.bip110-violation-container]="hasBIP110Violation(tx)">
     <a class="tx-link" [routerLink]="['/tx/' | relativeUrl, tx.txid]">
       <app-truncate [text]="tx.txid"></app-truncate>
     </a>
-    <div>
+    <div class="tx-header-right">
+      <ng-container *ngIf="hasBIP110Violation(tx)">
+        <span class="badge badge-bip110-violation" [ngbTooltip]="bip110Tooltip" placement="left">
+          ⚠️ BIP110 Violation
+        </span>
+        <ng-template #bip110Tooltip>
+          <div class="bip110-tooltip">
+            <strong>Would be invalid under BIP110:</strong>
+            <ul>
+              <li *ngFor="let violation of getBIP110Violations(tx)">{{ violation }}</li>
+            </ul>
+          </div>
+        </ng-template>
+      </ng-container>
       <ng-template [ngIf]="tx.status.confirmed"><app-timestamp [customFormat]="'yyyy-MM-dd HH:mm:ss'" [unixTime]="tx.status.block_time" [hideTimeSince]="true"></app-timestamp></ng-template>
       <ng-template [ngIf]="!tx.status.confirmed && tx.firstSeen">
         <i><app-time kind="since" [time]="tx.firstSeen" [fastRender]="true" [showTooltip]="true"></app-time></i>
@@ -13,7 +26,7 @@
     </div>
   </div>
 
-  <div class="header-bg box" [attr.data-cy]="'tx-' + i">
+  <div class="header-bg box" [class.bip110-violation-box]="hasBIP110Violation(tx)" [attr.data-cy]="'tx-' + i">
 
     <div *ngIf="errorUnblinded" class="error-unblinded">{{ errorUnblinded }}</div>
     @if (similarityMatches.get(tx.txid)?.size) {

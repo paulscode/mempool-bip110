@@ -1,9 +1,14 @@
-<div class="container-xl">
+<div class="container-xl" [class.bip110-violation-glow]="hasBip110Violation">
 
   <div class="title-block">
     <div *ngIf="rbfTransaction && !tx?.status?.confirmed" class="alert alert-mempool" role="alert">
       <span i18n="transaction.rbf.replacement|RBF replacement">This transaction has been replaced by:</span>
       <app-truncate [text]="rbfTransaction.txid" [lastChars]="12" [link]="['/tx/' | relativeUrl, rbfTransaction.txid]"></app-truncate>
+    </div>
+
+    <div *ngIf="hasBip110Violation" class="alert alert-bip110-violation" role="alert">
+      <span class="bip110-icon">☢️</span>
+      <span class="bip110-warning-text">BIP-110 VIOLATION: This transaction would be <strong>invalid</strong> under the proposed soft fork consensus rules.</span>
     </div>
 
     <ng-container *ngIf="!rbfTransaction || rbfTransaction?.size || tx">

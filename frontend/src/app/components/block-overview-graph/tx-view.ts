@@ -18,6 +18,7 @@ function toSpriteUpdate(params: ViewUpdateParams): SpriteUpdateParams {
     minDuration: params.minDuration,
     ...params.display.position,
     ...params.display.color,
+    bip110: params.display.bip110,
     adjust: params.adjust
   };
 }

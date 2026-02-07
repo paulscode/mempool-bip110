@@ -334,27 +334,72 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
     return this.specialBlocks[height]?.networks.includes(this.stateService.network || 'mainnet') ? true : false;
   }
 
+  hasBIP110Signaling(block: BlockchainBlock): boolean {
+    if (!block || !block.version) {
+      return false;
+    }
+    const versionBit = 4; // BIP110 'reduced_data' deployment (Reduced Data Temporary Softfork)
+    return (Number(block.version) & (1 << versionBit)) === (1 << versionBit);
+  }
+
+  hasBIP110Violations(block: BlockchainBlock): boolean {
+    return block?.extras?.bip110ViolationCount != null && block.extras.bip110ViolationCount > 0;
+  }
+
+  getBIP110ViolationCount(block: BlockchainBlock): number {
+    return block?.extras?.bip110ViolationCount || 0;
+  }
+
   getStyleForBlock(block: BlockchainBlock, index: number, animateEnterFrom: number = 0) {
     if (!block || block.placeholder) {
       return this.getStyleForPlaceholderBlock(index, animateEnterFrom);
     } else if (block.loading) {
       return this.getStyleForLoadingBlock(index, animateEnterFrom);
     }
-    const greenBackgroundHeight = 100 - (block.weight / this.stateService.env.BLOCK_WEIGHT_UNITS) * 100;
+    const totalWeight = this.stateService.env.BLOCK_WEIGHT_UNITS;
+    const blockWeight = block.weight || 0;
+    const violationWeight = block?.extras?.bip110ViolationWeight || 0;
+    
+    // Calculate percentages
+    const emptyPercent = 100 - (blockWeight / totalWeight) * 100;
+    const normalWeight = blockWeight - violationWeight;
+    const normalPercent = (normalWeight / totalWeight) * 100;
+    const violationPercent = (violationWeight / totalWeight) * 100;
+    
     let addLeft = 0;
 
     if (animateEnterFrom) {
       addLeft = animateEnterFrom || 0;
     }
 
+    // If there are BIP110 violations, create a three-tier gradient:
+    // Top: empty (dark) -> Middle: normal transactions (purple/blue) -> Bottom: violations (muted amber/orange)
+    let background: string;
+    if (violationWeight > 0 && violationPercent > 0.1) {
+      // Three segments: empty -> normal -> violations
+      const normalEnd = emptyPercent + normalPercent;
+      background = `linear-gradient(
+        to bottom,
+        var(--secondary) 0%,
+        var(--secondary) ${emptyPercent}%,
+        ${this.gradientColors[this.network][0]} ${emptyPercent}%,
+        ${this.gradientColors[this.network][1]} ${normalEnd}%,
+        #b86830 ${normalEnd}%,
+        #8b4513 100%
+      )`;
+    } else {
+      // Original two-segment gradient
+      background = `repeating-linear-gradient(
+        var(--secondary),
+        var(--secondary) ${emptyPercent}%,
+        ${this.gradientColors[this.network][0]} ${Math.max(emptyPercent, 0)}%,
+        ${this.gradientColors[this.network][1]} 100%
+      )`;
+    }
+
     return {
       left: addLeft + this.blockOffset * index + 'px',
-      background: `repeating-linear-gradient(
-        var(--secondary),
-        var(--secondary) ${greenBackgroundHeight}%,
-        ${this.gradientColors[this.network][0]} ${Math.max(greenBackgroundHeight, 0)}%,
-        ${this.gradientColors[this.network][1]} 100%
-      )`,
+      background,
       transition: animateEnterFrom ? 'background 2s, transform 1s' : null,
     };
   }

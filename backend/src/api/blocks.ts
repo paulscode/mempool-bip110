@@ -364,6 +364,20 @@ class Blocks {
       }
     }
 
+    // BIP110 'reduced_data' miner signaling detection (version bit 4, 55% threshold)
+    extras.bip110Signaling = Common.isSignalingBIP110(block.version);
+
+    // BIP110 violation count and weight - transactions that would be invalid under BIP110 rules
+    extras.bip110ViolationCount = 0;
+    extras.bip110ViolationWeight = 0;
+    for (const tx of transactions) {
+      const flags = Common.getBIP110Flags(tx);
+      if (flags !== 0n) {
+        extras.bip110ViolationCount++;
+        extras.bip110ViolationWeight += tx.weight;
+      }
+    }
+
     blk.extras = <BlockExtension>extras;
     return <BlockExtended>blk;
   }
@@ -585,7 +599,7 @@ class Blocks {
     const blockchainInfo = await bitcoinClient.getBlockchainInfo();
     const currentBlockHeight = blockchainInfo.blocks;
 
-    const targetSummaryVersion: number = 1;
+    const targetSummaryVersion: number = 2; // Bumped to re-classify with BIP110 flags
     const targetTemplateVersion: number = 1;
 
     const unclassifiedBlocksList = await BlocksSummariesRepository.$getSummariesBelowVersion(targetSummaryVersion);
@@ -1207,7 +1221,38 @@ class Blocks {
       } else {
         // Call Core RPC
         const block = await bitcoinClient.getBlock(hash, 2);
-        summary = this.summarizeBlock(block);
+        const txs = block.tx.map((tx: IBitcoinApi.VerboseTransaction) => {
+          const esploraLikeTx: IEsploraApi.Transaction = {
+            txid: tx.txid,
+            version: tx.version,
+            locktime: tx.locktime,
+            size: tx.size,
+            weight: tx.weight,
+            fee: tx.fee ? Math.round(tx.fee * 100000000) : 0,
+            vin: tx.vin.map(vin => ({
+              is_coinbase: !!vin.coinbase,
+              prevout: null,
+              scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
+              scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
+              sequence: vin.sequence,
+              txid: vin.txid || '',
+              vout: vin.vout || 0,
+              witness: vin.txinwitness || [],
+              inner_redeemscript_asm: '',
+              inner_witnessscript_asm: '',
+            })),
+            vout: tx.vout.map(vout => ({
+              value: Math.round(vout.value * 100000000),
+              scriptpubkey: vout.scriptPubKey.hex,
+              scriptpubkey_address: vout.scriptPubKey.address || (vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '') || '',
+              scriptpubkey_asm: vout.scriptPubKey.hex ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
+              scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
+            })),
+            status: { confirmed: true },
+          };
+          return transactionUtils.extendTransaction(esploraLikeTx);
+        });
+        summary = this.summarizeBlockTransactions(hash, block.height, txs);
         height = block.height;
       }
     }
@@ -1227,6 +1272,32 @@ class Blocks {
   public async $getSingleTxFromSummary(hash: string, txid: string): Promise<TransactionClassified | null> {
     const txs = await this.$getStrippedBlockTransactions(hash);
     return txs.find(tx => tx.txid === txid) || null;
+  }
+
+  /**
+   * Calculate BIP110 violation count and weight from block summary
+   */
+  public async $getBIP110ViolationStats(blockHash: string): Promise<{ count: number; weight: number }> {
+    if (!Common.blocksSummariesIndexingEnabled()) {
+      return { count: 0, weight: 0 };
+    }
+    
+    const summary = await BlocksSummariesRepository.$getByBlockId(blockHash);
+    if (!summary?.transactions) {
+      return { count: 0, weight: 0 };
+    }
+    
+    let count = 0;
+    let weight = 0;
+    for (const tx of summary.transactions) {
+      if (Common.hasAnyBIP110Violation(tx.flags)) {
+        count++;
+        // Weight in summary is stored as vsize, multiply by 4 for weight units
+        // Actually, in block summaries, it's just vsize
+        weight += (tx.vsize || 0) * 4;
+      }
+    }
+    return { count, weight };
   }
 
   /**
@@ -1257,6 +1328,19 @@ class Blocks {
       let block = this.getBlocks().find((b) => b.height === currentHeight);
       if (block) {
         // Using the memory cache (find by height)
+        // Ensure BIP110 data is populated for cached blocks
+        if (block.extras) {
+          // Always recompute from version bit (not cached value) to avoid stale data
+          block.extras.bip110Signaling = Common.isSignalingBIP110(block.version);
+          // Also check for missing weight (added later)
+          if (block.extras.bip110ViolationCount === undefined || block.extras.bip110ViolationCount === null ||
+              block.extras.bip110ViolationWeight === undefined || block.extras.bip110ViolationWeight === null) {
+            // Calculate violation count and weight from block summary
+            const stats = await this.$getBIP110ViolationStats(block.id);
+            block.extras.bip110ViolationCount = stats.count;
+            block.extras.bip110ViolationWeight = stats.weight;
+          }
+        }
         returnBlocks.push(block);
       } else {
         // Using indexing (find by height, index on the fly, save in database)

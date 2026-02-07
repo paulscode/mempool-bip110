@@ -1,3 +1,98 @@
+// BIP110 Violation Glow Effect
+.bip110-violation-glow {
+  background: linear-gradient(135deg, 
+    rgba(255, 140, 0, 0.12) 0%, 
+    rgba(255, 69, 0, 0.08) 25%, 
+    rgba(255, 140, 0, 0.12) 50%, 
+    rgba(255, 69, 0, 0.08) 75%, 
+    rgba(255, 140, 0, 0.12) 100%);
+  background-size: 400% 400%;
+  animation: bip110-warning-pulse 3s ease-in-out infinite;
+  border-radius: 8px;
+  box-shadow: 
+    inset 0 0 50px rgba(255, 140, 0, 0.15),
+    0 0 20px rgba(255, 140, 0, 0.1);
+  border: 1px solid rgba(255, 140, 0, 0.3);
+}
+
+@keyframes bip110-warning-pulse {
+  0%, 100% {
+    background-position: 0% 50%;
+    box-shadow: 
+      inset 0 0 50px rgba(255, 140, 0, 0.15),
+      0 0 20px rgba(255, 140, 0, 0.1);
+  }
+  50% {
+    background-position: 100% 50%;
+    box-shadow: 
+      inset 0 0 70px rgba(255, 140, 0, 0.2),
+      0 0 30px rgba(255, 140, 0, 0.15);
+  }
+}
+
+// BIP110 Violation Alert Banner
+.alert-bip110-violation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, 
+    rgba(255, 102, 0, 0.25) 0%, 
+    rgba(255, 69, 0, 0.2) 50%, 
+    rgba(255, 102, 0, 0.25) 100%);
+  border: 2px solid rgba(255, 102, 0, 0.7);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 15px;
+  animation: bip110-alert-pulse 2s ease-in-out infinite;
+  box-shadow: 
+    0 0 15px rgba(255, 102, 0, 0.3),
+    inset 0 0 20px rgba(255, 102, 0, 0.1);
+  width: 100%;
+  
+  .bip110-icon {
+    font-size: 1.5rem;
+    filter: drop-shadow(0 0 8px rgba(255, 140, 0, 0.8));
+    animation: bip110-icon-glow 1.5s ease-in-out infinite;
+  }
+  
+  .bip110-warning-text {
+    color: #fff;
+    font-size: 0.95rem;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    
+    strong {
+      color: #ff8c00;
+      text-transform: uppercase;
+    }
+  }
+}
+
+@keyframes bip110-alert-pulse {
+  0%, 100% {
+    box-shadow: 
+      0 0 15px rgba(255, 102, 0, 0.3),
+      inset 0 0 20px rgba(255, 102, 0, 0.1);
+    border-color: rgba(255, 102, 0, 0.7);
+  }
+  50% {
+    box-shadow: 
+      0 0 25px rgba(255, 102, 0, 0.5),
+      inset 0 0 30px rgba(255, 102, 0, 0.2);
+    border-color: rgba(255, 140, 0, 0.9);
+  }
+}
+
+@keyframes bip110-icon-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(255, 140, 0, 0.8));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 15px rgba(255, 140, 0, 1));
+    transform: scale(1.1);
+  }
+}
+
 .adjust-btn-padding {
   padding: 0.55rem;
 }

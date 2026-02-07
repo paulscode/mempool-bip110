@@ -18,6 +18,7 @@ import { CacheService } from '@app/services/cache.service';
 import { ServicesApiServices } from '@app/services/services-api.service';
 import { PreloadService } from '@app/services/preload.service';
 import { identifyPrioritizedTransactions } from '@app/shared/transaction.utils';
+import { Bip110Service } from '@app/services/bip110.service';
 
 @Component({
   selector: 'app-block',
@@ -69,6 +70,7 @@ export class BlockComponent implements OnInit, OnDestroy {
   numUnexpected: number = 0;
   mode: 'projected' | 'actual' = 'projected';
   currentQueryParams: Params;
+  bip110ViolationCount: number = 0;
 
   overviewSubscription: Subscription;
   accelerationsSubscription: Subscription;
@@ -308,13 +310,19 @@ export class BlockComponent implements OnInit, OnDestroy {
     .subscribe(([transactions, blockAudit]) => {
       if (transactions) {
         this.strippedTransactions = transactions;
+        // Count BIP110 violations
+        this.bip110ViolationCount = transactions.filter(tx => Bip110Service.hasAnyViolation(tx.flags)).length;
       } else {
         this.strippedTransactions = [];
+        this.bip110ViolationCount = 0;
       }
       this.blockAudit = blockAudit;
 
       this.setupBlockAudit();
       this.isLoadingOverview = false;
+      
+      // Force canvas resize after DOM updates to fix mouse position calculation
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 0);
     });
 
     this.accelerationsSubscription = this.block$.pipe(
@@ -464,6 +472,11 @@ export class BlockComponent implements OnInit, OnDestroy {
 
   hasTaproot(version: number): boolean {
     const versionBit = 2; // Taproot
+    return (Number(version) & (1 << versionBit)) === (1 << versionBit);
+  }
+
+  hasBIP110Signaling(version: number): boolean {
+    const versionBit = 4; // BIP110 'reduced_data' deployment (Reduced Data Temporary Softfork)
     return (Number(version) & (1 << versionBit)) === (1 << versionBit);
   }
 

@@ -9,7 +9,7 @@ import { Price } from '@app/services/price.service';
 import { StateService } from '@app/services/state.service';
 import { ThemeService } from '@app/services/theme.service';
 import { Subscription } from 'rxjs';
-import { defaultColorFunction, setOpacity, defaultAuditColors, defaultColors, ageColorFunction, contrastColorFunction, contrastAuditColors, contrastColors } from '@components/block-overview-graph/utils';
+import { defaultColorFunction, setOpacity, defaultAuditColors, defaultColors, ageColorFunction, contrastColorFunction, contrastAuditColors, contrastColors, hasBIP110Violation, setBIP110PulsePhase } from '@components/block-overview-graph/utils';
 import { ActiveFilter, FilterMode, toFlags } from '@app/shared/filters.utils';
 import { detectWebGL } from '@app/shared/graphs.utils';
 
@@ -68,6 +68,7 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
   gl: WebGLRenderingContext;
   animationFrameRequest: number;
   animationHeartBeat: number;
+  bip110PulseInterval: number;
   displayWidth: number;
   displayHeight: number;
   cssWidth: number;
@@ -84,6 +85,7 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
 
   readyNextFrame = false;
   lastUpdate: number = 0;
+  lastBip110PulseUpdate: number = 0;
   pendingUpdate: {
     count: number,
     add: { [txid: string]: TransactionStripped },
@@ -452,6 +454,14 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
       now = performance.now();
     }
     this.applyQueuedUpdates();
+    
+    // Update BIP110 pulse phase and trigger color update for pulsing effect
+    setBIP110PulsePhase(now * 0.005); // Pulse at ~0.8Hz
+    if (this.scene && now - this.lastBip110PulseUpdate > 50) { // Update colors every 50ms for smooth pulse
+      this.lastBip110PulseUpdate = now;
+      this.scene.updateAllColors();
+    }
+    
     // skip re-render if there's no change to the scene
     if (this.scene && this.gl && this.vertexArray) {
       /* SET UP SHADER UNIFORMS */
@@ -492,7 +502,9 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
     }
 
     /* LOOP */
-    if (this.running && this.scene && now <= (this.scene.animateUntil + 500)) {
+    // Keep animation running if we have BIP110 violations (for pulsing effect)
+    const hasBIP110Txs = this.scene && Object.values(this.scene.txs).some(tx => hasBIP110Violation(tx));
+    if (this.running && this.scene && (now <= (this.scene.animateUntil + 500) || hasBIP110Txs)) {
       this.doRun();
     } else {
       clearTimeout(this.animationHeartBeat);
@@ -692,7 +704,8 @@ const attribs = {
   colR: { type: 'FLOAT', count: 4, pointer: null, offset: 0 },
   colG: { type: 'FLOAT', count: 4, pointer: null, offset: 0 },
   colB: { type: 'FLOAT', count: 4, pointer: null, offset: 0 },
-  colA: { type: 'FLOAT', count: 4, pointer: null, offset: 0 }
+  colA: { type: 'FLOAT', count: 4, pointer: null, offset: 0 },
+  bip110: { type: 'FLOAT', count: 1, pointer: null, offset: 0 }
 };
 // Calculate the number of bytes per vertex based on specified attributes
 const stride = Object.values(attribs).reduce((total, attrib) => {
@@ -707,6 +720,8 @@ for (let i = 0, offset = 0; i < Object.keys(attribs).length; i++) {
 
 const vertShaderSrc = `
 varying lowp vec4 vColor;
+varying lowp vec2 vUV;
+varying lowp float vBip110;
 
 // each attribute contains [x: startValue, y: endValue, z: startTime, w: rate]
 // shader interpolates between start and end values at the given rate, from the given time
@@ -719,6 +734,7 @@ attribute vec4 colR;
 attribute vec4 colG;
 attribute vec4 colB;
 attribute vec4 colA;
+attribute float bip110;
 
 uniform vec2 screenSize;
 uniform float now;
@@ -751,14 +767,57 @@ void main() {
   float alpha = interpolateAttribute(colA);
 
   vColor = vec4(red, green, blue, alpha);
+  vUV = offset;  // offset is 0-1 range, use as UV coordinates
+  vBip110 = bip110;
 }
 `;
 
 const fragShaderSrc = `
+precision mediump float;
 varying lowp vec4 vColor;
+varying lowp vec2 vUV;
+varying lowp float vBip110;
 
 void main() {
   gl_FragColor = vColor;
+  
+  // Draw radioactive symbol for BIP110 violations
+  if (vBip110 > 0.5) {
+    // Center UV at (0.5, 0.5), scale to -1 to 1 range
+    vec2 uv = (vUV - 0.5) * 2.0;
+    float dist = length(uv);
+    float angle = atan(uv.y, uv.x);
+    
+    // Radioactive symbol: 3 fan blades + center circle + outer ring
+    float symbol = 0.0;
+    
+    // Outer ring (0.7 to 0.9 radius)
+    if (dist > 0.65 && dist < 0.85) {
+      symbol = 1.0;
+    }
+    
+    // Inner circle (radius 0.2)
+    if (dist < 0.18) {
+      symbol = 1.0;
+    }
+    
+    // Three fan blades (between inner circle and outer ring)
+    if (dist > 0.22 && dist < 0.62) {
+      // Normalize angle to 0-1, create 3 segments
+      float normAngle = (angle + 3.14159) / 6.28318; // 0 to 1
+      float segment = fract(normAngle * 3.0); // 3 segments
+      // Each blade covers about 40% of its segment (with gaps)
+      if (segment > 0.1 && segment < 0.5) {
+        symbol = 1.0;
+      }
+    }
+    
+    // Blend symbol with subtle transparency
+    float symbolAlpha = symbol * 0.25; // Very subtle
+    // Darken where symbol is present
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * 0.4, symbolAlpha);
+  }
+  
   // premultiply alpha
   gl_FragColor.rgb *= gl_FragColor.a;
 }

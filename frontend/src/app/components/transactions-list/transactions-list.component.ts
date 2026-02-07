@@ -15,6 +15,7 @@ import { OrdApiService } from '@app/services/ord-api.service';
 import { Inscription } from '@app/shared/ord/inscription.utils';
 import { Etching, Runestone } from '@app/shared/ord/rune.utils';
 import { ADDRESS_SIMILARITY_THRESHOLD, AddressMatch, AddressSimilarity, AddressType, AddressTypeInfo, checkedCompareAddressStrings, detectAddressType } from '@app/shared/address-utils';
+import { Bip110Service } from '@app/services/bip110.service';
 
 @Component({
   selector: 'app-transactions-list',
@@ -501,6 +502,20 @@ export class TransactionsListComponent implements OnInit, OnChanges {
       this.showOrdData[key].show = !this.showOrdData[key].show;
 
     }
+  }
+
+  /**
+   * Check if a transaction has any BIP110 violations
+   */
+  hasBIP110Violation(tx: Transaction): boolean {
+    return Bip110Service.hasAnyViolation(tx.flags);
+  }
+
+  /**
+   * Get the list of BIP110 violations for a transaction
+   */
+  getBIP110Violations(tx: Transaction): string[] {
+    return Bip110Service.getViolationLabels(tx.flags);
   }
 
   ngOnDestroy(): void {

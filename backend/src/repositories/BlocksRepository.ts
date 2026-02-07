@@ -1152,6 +1152,25 @@ class BlocksRepository {
       extras.pool.minerNames = parseDATUMTemplateCreator(extras.coinbaseRaw);
     }
 
+    // BIP110 'reduced_data' signaling detection (version bit 4, 55% threshold)
+    extras.bip110Signaling = Common.isSignalingBIP110(dbBlk.version);
+
+    // BIP110 violation count and weight - transactions that would be invalid under BIP110 rules
+    extras.bip110ViolationCount = 0;
+    extras.bip110ViolationWeight = 0;
+    if (Common.blocksSummariesIndexingEnabled()) {
+      const summary = await BlocksSummariesRepository.$getByBlockId(dbBlk.id);
+      if (summary?.transactions) {
+        for (const tx of summary.transactions) {
+          if (Common.hasAnyBIP110Violation(tx.flags)) {
+            extras.bip110ViolationCount++;
+            // vsize * 4 = weight
+            extras.bip110ViolationWeight += (tx.vsize || 0) * 4;
+          }
+        }
+      }
+    }
+
     blk.extras = <BlockExtension>extras;
     return <BlockExtended>blk;
   }

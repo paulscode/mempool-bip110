@@ -201,7 +201,7 @@
             <span class="badge badge-accelerated mr-1" i18n="transaction.audit.accelerated">Accelerated</span>
           }
           <ng-container *ngFor="let filter of filters;">
-            <span class="badge badge-primary filter-tag mr-1">{{ filter.label }}</span>
+            <span class="badge mr-1" [ngClass]="filter.key.startsWith('bip110_') ? 'badge-bip110-invalid' : 'badge-primary filter-tag'">{{ filter.key.startsWith('bip110_') ? '⚠️ ' : '' }}{{ filter.label }}</span>
           </ng-container>
         </td>
       </tr>

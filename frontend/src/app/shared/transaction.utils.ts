@@ -494,6 +494,9 @@ export function getTransactionFlags(tx: Transaction, cpfpInfo?: CpfpInfo, replac
     flags |= TransactionFlags.nonstandard;
   }
 
+  // BIP110 violation detection
+  flags |= getBIP110Flags(tx);
+
   return flags;
 }
 
@@ -1519,6 +1522,123 @@ function readVector(buffer: Uint8Array, offset: number): [Uint8Array[], number] 
   }
 
   return [vector, updatedOffset];
+}
+
+// BIP110 consensus limits (per bip-0110.mediawiki Specification)
+const BIP110_MAX_SCRIPTPUBKEY_SIZE = 34;   // Rule 1: Max scriptPubKey size (except OP_RETURN)
+const BIP110_MAX_OPRETURN_SIZE = 83;       // Rule 1: Max OP_RETURN size
+const BIP110_MAX_PUSHDATA_SIZE = 256;      // Rule 2: Max OP_PUSHDATA*/witness element size (except BIP16 redeemScript)
+const BIP110_MAX_CONTROL_BLOCK_SIZE = 257; // Rule 5: Max Taproot control block size (128 script leaves)
+
+/**
+ * Check transaction for BIP110 consensus rule violations.
+ * Returns bigint flags for any violations found.
+ * 
+ * BIP110 Rules (per bip-0110.mediawiki Specification):
+ * 1. New output scriptPubKeys > 34 bytes invalid (except OP_RETURN up to 83 bytes)
+ * 2. OP_PUSHDATA* payloads and witness stack elements > 256 bytes invalid
+ *    (except the redeemScript push in BIP16 scriptSigs)
+ * 3. Spending undefined witness/Tapleaf versions (not v0, v1, or P2A) invalid
+ * 4. Witness stacks with a Taproot annex invalid
+ * 5. Taproot control blocks > 257 bytes (merkle tree with >128 script leaves) invalid
+ * 6. Tapscripts including OP_SUCCESS* opcodes anywhere (even unexecuted) invalid
+ * 7. Tapscripts executing OP_IF or OP_NOTIF (regardless of result) invalid
+ *
+ * Note: Inputs spending UTXOs created before activation height are exempt.
+ */
+function getBIP110Flags(tx: Transaction): bigint {
+  let flags = 0n;
+
+  // Rule 1: Check output scriptPubKey sizes
+  for (const vout of tx.vout) {
+    const scriptSize = vout.scriptpubkey.length / 2; // hex string to bytes
+    if (vout.scriptpubkey_type === 'op_return') {
+      if (scriptSize > BIP110_MAX_OPRETURN_SIZE) {
+        flags |= TransactionFlags.bip110_large_scriptpubkey;
+      }
+    } else if (scriptSize > BIP110_MAX_SCRIPTPUBKEY_SIZE) {
+      flags |= TransactionFlags.bip110_large_scriptpubkey;
+    }
+  }
+
+  // Check inputs for rules 2-7
+  for (const vin of tx.vin) {
+    if (vin.is_coinbase) continue;
+
+    if (vin.witness?.length) {
+      // Detect Taproot annex (last witness starts with 0x50)
+      const lastWitness = vin.witness[vin.witness.length - 1];
+      const hasAnnex = vin.witness.length > 1 && lastWitness.startsWith('50');
+
+      // Rule 4: Taproot annex is invalid
+      if (hasAnnex && vin.prevout?.scriptpubkey_type === 'v1_p2tr') {
+        flags |= TransactionFlags.bip110_taproot_annex;
+      }
+
+      // Rule 2: Check witness element sizes (> 256 bytes)
+      for (const witness of vin.witness) {
+        if ((witness.length / 2) > BIP110_MAX_PUSHDATA_SIZE) {
+          flags |= TransactionFlags.bip110_large_pushdata;
+          break; // Only need to flag once
+        }
+      }
+
+      // Check for Taproot script path spends
+      if (vin.prevout?.scriptpubkey_type === 'v1_p2tr' && vin.witness.length > (hasAnnex ? 2 : 1)) {
+        // Script path spend - control block is last (or second-to-last with annex)
+        const controlBlockIndex = vin.witness.length - (hasAnnex ? 2 : 1);
+        const controlBlock = vin.witness[controlBlockIndex];
+
+        // Rule 5: Check control block size (> 257 bytes)
+        if ((controlBlock.length / 2) > BIP110_MAX_CONTROL_BLOCK_SIZE) {
+          flags |= TransactionFlags.bip110_large_control_block;
+        }
+
+        // Get tapscript for analysis (script is before control block)
+        const tapscriptIndex = controlBlockIndex - 1;
+        if (tapscriptIndex >= 0) {
+          const tapscriptAsm = vin.inner_witnessscript_asm;
+
+          if (tapscriptAsm) {
+            // Rule 6: OP_SUCCESS* opcodes anywhere in tapscript (even unexecuted) are invalid
+            if (/\bOP_SUCCESS\d+\b/.test(tapscriptAsm)) {
+              flags |= TransactionFlags.bip110_op_success;
+            }
+
+            // Rule 7: Tapscripts executing OP_IF or OP_NOTIF (regardless of result) are invalid
+            if (/\b(OP_IF|OP_NOTIF)\b/.test(tapscriptAsm)) {
+              flags |= TransactionFlags.bip110_op_if_notif;
+            }
+          }
+        }
+      }
+
+      // Rule 3: Spending undefined witness/Tapleaf versions (not v0, v1, or P2A) is invalid
+      // P2A is witness v1 with a 2-byte program, so version > 1 correctly excludes v0, v1, and P2A
+      if (vin.prevout?.scriptpubkey_type === 'unknown') {
+        const witnessProgram = isWitnessProgram(vin.prevout.scriptpubkey);
+        if (witnessProgram && witnessProgram.version > 1) {
+          flags |= TransactionFlags.bip110_undefined_witness;
+        }
+      }
+    }
+
+    // Rule 2: Check scriptSig push data sizes (> 256 bytes)
+    // Note: BIP110 exempts the BIP16 redeemScript (last push in P2SH scriptSigs).
+    // The frontend does not apply this exemption; the backend handles it correctly.
+    if (vin.scriptsig_asm) {
+      const asmParts = vin.scriptsig_asm.split(' ');
+      for (const part of asmParts) {
+        // Skip opcodes, check data pushes
+        if (!part.startsWith('OP_') && (part.length / 2) > BIP110_MAX_PUSHDATA_SIZE) {
+          flags |= TransactionFlags.bip110_large_pushdata;
+          break;
+        }
+      }
+    }
+  }
+
+  return flags;
 }
 
 // Inversed the opcodes object from https://github.com/mempool/mempool/blob/14e49126c3ca8416a8d7ad134a95c5e090324d69/backend/src/utils/bitcoin-script.ts#L1

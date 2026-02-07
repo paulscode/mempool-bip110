@@ -27,6 +27,7 @@ import { StorageService } from '@app/services/storage.service';
 import { seoDescriptionNetwork } from '@app/shared/common.utils';
 import { getTransactionFlags, getUnacceleratedFeeRate } from '@app/shared/transaction.utils';
 import { Filter, TransactionFlags, toFilters } from '@app/shared/filters.utils';
+import { Bip110Service } from '@app/services/bip110.service';
 import { BlockExtended, CpfpInfo, RbfTree, MempoolPosition, DifficultyAdjustment, Acceleration, AccelerationPosition } from '@interfaces/node-api.interface';
 import { LiquidUnblinding } from '@components/transaction/liquid-ublinding';
 import { RelativeUrlPipe } from '@app/shared/pipes/relative-url/relative-url.pipe';
@@ -143,6 +144,7 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
   notAcceleratedOnLoad: boolean = null;
 
   featuresEnabled: boolean;
+  hasBip110Violation: boolean = false;
   segwitEnabled: boolean;
   rbfEnabled: boolean;
   taprootEnabled: boolean;
@@ -934,6 +936,7 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
       this.rbfEnabled = !this.tx.status.confirmed || isFeatureActive(this.stateService.network, this.tx.status.block_height, 'rbf');
       this.tx.flags = getTransactionFlags(this.tx, null, null, this.tx.status?.block_time, this.stateService.network);
       this.filters = this.tx.flags ? toFilters(this.tx.flags).filter(f => f.txPage) : [];
+      this.hasBip110Violation = this.tx.flags ? Bip110Service.hasAnyViolation(this.tx.flags) : false;
       this.checkAccelerationEligibility();
     } else {
       this.segwitEnabled = false;

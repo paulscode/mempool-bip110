@@ -11,6 +11,8 @@
       <div [attr.data-cy]="'bitcoin-block-offset-' + offset + '-index-' + i"
         class="text-center bitcoin-block mined-block blockchain-blocks-offset-{{ offset }}-index-{{ i }}"
         [class.offscreen]="!static && count && i >= count"
+        [class.bip110-signaling]="hasBIP110Signaling(block)"
+        [class.bip110-violations]="hasBIP110Violations(block)"
         id="bitcoin-block-{{ block.height }}" [ngStyle]="blockStyles[i]"
         [style]="blockTransformation"
         [class.blink-bg]="isSpecial(block.height)">
@@ -70,6 +72,17 @@
             </ng-template>
           </a>
         </div>
+        <div class="bip110-indicator" *ngIf="hasBIP110Signaling(block)" title="This block signals BIP110 support">
+          <span class="badge badge-bip110-signal-mini">BIP110</span>
+        </div>
+        <ng-container *ngIf="hasBIP110Violations(block)">
+          <div class="bip110-radioactive-indicator" [title]="'This block contains ' + getBIP110ViolationCount(block) + ' transaction(s) that would violate BIP110 rules'">
+            <img src="/resources/radioactive.svg" alt="BIP110 Violation" class="radioactive-icon">
+          </div>
+          <div class="bip110-violation-count" [title]="'This block contains ' + getBIP110ViolationCount(block) + ' transaction(s) that would violate BIP110 rules'">
+            <span class="badge badge-bip110-violation-mini">{{ getBIP110ViolationCount(block) }}</span>
+          </div>
+        </ng-container>
       </div>
     </ng-container>
     <ng-template #placeholderBlock>

@@ -208,7 +208,10 @@ export interface BlockExtension {
     name: string;
     slug: string;
     minerNames: string[] | null;
-  }
+  };
+  bip110Signaling?: boolean;
+  bip110ViolationCount?: number;
+  bip110ViolationWeight?: number;
 }
 
 export interface BlockExtended extends Block {

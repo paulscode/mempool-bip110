@@ -284,7 +284,7 @@ class BitcoinApi implements AbstractBitcoinApi {
         scriptpubkey_address: vout.scriptPubKey && vout.scriptPubKey.address ? vout.scriptPubKey.address
           : vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '',
         scriptpubkey_asm: vout.scriptPubKey.asm ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
-        scriptpubkey_type: this.translateScriptPubKeyType(vout.scriptPubKey.type),
+        scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
       };
     });
 
@@ -321,7 +321,7 @@ class BitcoinApi implements AbstractBitcoinApi {
     return esploraTransaction;
   }
 
-  private translateScriptPubKeyType(outputType: string): string {
+  public static translateScriptPubKeyType(outputType: string): string {
     const map = {
       'pubkey': 'p2pk',
       'pubkeyhash': 'p2pkh',

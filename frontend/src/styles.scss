@@ -1408,3 +1408,177 @@ a {
 .btn-small-height {
 	line-height: 1;
 }
+
+// ============================================
+// BIP110 Visualization Styles
+// ============================================
+
+// BIP110 Color palette
+$bip110-warning-primary: #ff6600;
+$bip110-warning-secondary: #ff9944;
+$bip110-warning-glow: rgba(255, 102, 0, 0.6);
+
+$bip110-signal-primary: #00ff88;
+$bip110-signal-secondary: #ffd700;
+$bip110-signal-glow: rgba(0, 255, 136, 0.5);
+$bip110-signal-dark: #003322;
+
+// CSS Variables for BIP110
+:root {
+  --bip110-warning: #{$bip110-warning-primary};
+  --bip110-warning-secondary: #{$bip110-warning-secondary};
+  --bip110-warning-glow: #{$bip110-warning-glow};
+  --bip110-signal: #{$bip110-signal-primary};
+  --bip110-signal-secondary: #{$bip110-signal-secondary};
+  --bip110-signal-glow: #{$bip110-signal-glow};
+}
+
+// BIP110 Invalid/Warning badge (for transactions violating rules)
+.badge-bip110-invalid {
+  background: linear-gradient(135deg, $bip110-warning-primary, $bip110-warning-secondary);
+  color: #fff;
+  font-weight: bold;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  animation: bip110-warning-pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 10px $bip110-warning-glow;
+  border: none;
+}
+
+// BIP110 Signaling badge (for blocks signaling support)
+.badge-bip110-signal {
+  background: linear-gradient(135deg, $bip110-signal-primary, $bip110-signal-secondary);
+  color: #000;
+  font-weight: bold;
+  animation: bip110-signal-shimmer 3s ease-in-out infinite;
+  box-shadow: 0 0 12px $bip110-signal-glow;
+  border: none;
+}
+
+// Transaction row highlighting for BIP110 violations
+.bip110-invalid-row {
+  background: linear-gradient(90deg, 
+    rgba(255, 102, 0, 0.15) 0%, 
+    rgba(255, 102, 0, 0.05) 50%,
+    transparent 100%
+  ) !important;
+  border-left: 3px solid $bip110-warning-primary !important;
+}
+
+// Block highlighting for signaling
+.bip110-signaling-block {
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border: 2px solid $bip110-signal-primary;
+    border-radius: inherit;
+    animation: bip110-signal-border 2s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 1;
+  }
+}
+
+// Block highlighting for containing invalid transactions
+.bip110-invalid-block {
+  position: relative;
+  
+  &::after {
+    content: '⚠️';
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-size: 12px;
+    animation: bip110-warning-bounce 1s ease-in-out infinite;
+    z-index: 2;
+  }
+}
+
+// BIP110 Tooltip styling
+.bip110-tooltip {
+  text-align: left;
+  
+  .bip110-tooltip-title {
+    font-weight: bold;
+    color: $bip110-warning-primary;
+    margin-bottom: 4px;
+  }
+  
+  .bip110-tooltip-list {
+    margin: 0;
+    padding-left: 16px;
+    font-size: 0.9em;
+  }
+}
+
+// BIP110 Mini badge for blockchain blocks
+.badge-bip110-signal-mini {
+  display: inline-block;
+  padding: 1px 4px;
+  font-size: 8px;
+  font-weight: bold;
+  color: #003d1a;
+  background: linear-gradient(135deg, $bip110-signal-primary 0%, $bip110-signal-secondary 100%);
+  border-radius: 3px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+  animation: bip110-signal-shimmer 2s ease-in-out infinite;
+  background-size: 200% 200%;
+}
+
+// BIP110 indicator container on blockchain blocks
+.bip110-indicator {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 10;
+}
+
+// BIP110 signaling block styling lives in blockchain-blocks.component.scss
+// (must be in the component to properly style all 3 cube faces: front, left, top)
+
+// ============================================
+// BIP110 Animations
+// ============================================
+
+@keyframes bip110-warning-pulse {
+  0%, 100% { 
+    opacity: 1;
+    box-shadow: 0 0 10px $bip110-warning-glow;
+  }
+  50% { 
+    opacity: 0.85;
+    box-shadow: 0 0 20px $bip110-warning-glow, 0 0 30px rgba(255, 102, 0, 0.3);
+  }
+}
+
+@keyframes bip110-signal-shimmer {
+  0%, 100% {
+    background-position: 0% 50%;
+    box-shadow: 0 0 12px $bip110-signal-glow;
+  }
+  50% {
+    background-position: 100% 50%;
+    box-shadow: 0 0 20px $bip110-signal-glow, 0 0 30px rgba(0, 255, 136, 0.3);
+  }
+}
+
+@keyframes bip110-signal-border {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 5px $bip110-signal-glow;
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 15px $bip110-signal-glow;
+  }
+}
+
+@keyframes bip110-warning-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+

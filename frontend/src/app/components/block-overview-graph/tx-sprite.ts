@@ -5,9 +5,9 @@ const attribKeys = ['a', 'b', 't', 'v'];
 const updateKeys = ['x', 'y', 's', 'r', 'g', 'b', 'a'];
 
 export default class TxSprite {
-  static vertexSize = 30;
+  static vertexSize = 31;
   static vertexCount = 6;
-  static dataSize: number = (30 * 6);
+  static dataSize: number = (31 * 6);
 
   vertexArray: FastVertexArray;
   vertexPointer: number;
@@ -15,6 +15,7 @@ export default class TxSprite {
   updateMap: Update;
   attributes: Attributes;
   tempAttributes: OptionalAttributes;
+  bip110: number;  // 1 if transaction violates any BIP110 consensus rule, 0 otherwise
 
 
   constructor(params: SpriteUpdateParams, vertexArray: FastVertexArray) {
@@ -24,6 +25,7 @@ export default class TxSprite {
     this.updateMap = {
       x: 0, y: 0, s: 0, r: 0, g: 0, b: 0, a: 0
     };
+    this.bip110 = params.bip110 || 0;
 
     this.attributes = {
       x: { a: params.x, b: params.x, t: offsetTime, v: 0, d: 0 },
@@ -143,7 +145,7 @@ export default class TxSprite {
 
     // update vertex data in place
     // ugly, but avoids overhead of allocating large temporary arrays
-    const vertexStride = VI.length + 2;
+    const vertexStride = VI.length + 2 + 1;  // +1 for bip110 flag
     for (let vertex = 0; vertex < 6; vertex++) {
       this.vertexData[vertex * vertexStride] = vertexOffsetFactors[vertex][0];
       this.vertexData[(vertex * vertexStride) + 1] = vertexOffsetFactors[vertex][1];
@@ -152,6 +154,8 @@ export default class TxSprite {
         // VI[i].a is the attribute, VI[i].f is the inner field, VI[i].offA and VI[i].offB are offset factors
         this.vertexData[(vertex * vertexStride) + step + 2] = attributes[VI[step].a][VI[step].f];
       }
+      // Add bip110 flag at the end
+      this.vertexData[(vertex * vertexStride) + VI.length + 2] = this.bip110;
     }
 
     this.vertexArray.setData(this.vertexPointer, this.vertexData);

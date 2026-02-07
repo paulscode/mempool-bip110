@@ -1,6 +1,46 @@
 import { feeLevels, defaultMempoolFeeColors, contrastMempoolFeeColors } from '@app/app.constants';
 import { Color } from '@components/block-overview-graph/sprite-types';
 import TxView from '@components/block-overview-graph/tx-view';
+import { TransactionFlags } from '@app/shared/filters.utils';
+
+// Combined bitmask for all 7 BIP110 violation flags (per bip-0110.mediawiki Specification)
+const BIP110_VIOLATION_MASK = 
+  TransactionFlags.bip110_large_scriptpubkey |
+  TransactionFlags.bip110_large_pushdata |
+  TransactionFlags.bip110_undefined_witness |
+  TransactionFlags.bip110_taproot_annex |
+  TransactionFlags.bip110_large_control_block |
+  TransactionFlags.bip110_op_success |
+  TransactionFlags.bip110_op_if_notif;
+
+// Check if transaction has any BIP110 violation
+export function hasBIP110Violation(tx: TxView): boolean {
+  return tx.bigintFlags ? (tx.bigintFlags & BIP110_VIOLATION_MASK) !== 0n : false;
+}
+
+// BIP110 pulse state - oscillates between bright and dim orange
+let bip110PulsePhase = 0;
+export function getBIP110PulsePhase(): number {
+  return bip110PulsePhase;
+}
+export function setBIP110PulsePhase(phase: number): void {
+  bip110PulsePhase = phase;
+}
+
+// Get pulsing BIP110 color based on current phase
+export function getPulsingBIP110Color(): Color {
+  // Pulse between neon orange and yellow-green (halfway to full green)
+  const rawPulse = 0.5 + 0.5 * Math.sin(bip110PulsePhase);
+  // Use power function to spend more time on orange (pulse=0) end
+  const pulse = Math.pow(rawPulse, 5);  // Quintic weighting: even more orange, very brief green flash
+  // Neon orange (ff6b00) at pulse=0 -> Yellow-green (~9cb50a) at pulse=1
+  return {
+    r: 1.0 - 0.39 * pulse,   // 1.0 (orange) to 0.61 (yellow-green)
+    g: 0.42 + 0.29 * pulse,  // 0.42 (orange) to 0.71 (yellow-green)
+    b: 0.0 + 0.04 * pulse,   // 0.0 to 0.04
+    a: 1
+  };
+}
 
 export function hexToColor(hex: string): Color {
   return {
@@ -87,6 +127,8 @@ export const defaultAuditColors = {
   added_prioritized: darken(desaturate(hexToColor('0099ff'), 0.15), 0.85),
   prioritized: darken(desaturate(hexToColor('0099ff'), 0.3), 0.7),
   accelerated: hexToColor('8f5ff6'),
+  // BIP110 violation - neon orange warning
+  bip110_violation: hexToColor('ff6b00'),
 };
 
 const contrastColors: { [key: string]: ColorPalette } = {
@@ -118,6 +160,8 @@ export const contrastAuditColors = {
   added_prioritized: darken(desaturate(hexToColor('00bb98'), 0.15), 0.85),
   prioritized: darken(desaturate(hexToColor('00bb98'), 0.3), 0.7),
   accelerated: hexToColor('8f5ff6'),
+  // BIP110 violation - neon orange warning (brighter for contrast mode)
+  bip110_violation: hexToColor('ff8c00'),
 };
 
 export function defaultColorFunction(
@@ -126,6 +170,11 @@ export function defaultColorFunction(
   auditColors: { [status: string]: Color } = defaultAuditColors,
   relativeTime?: number,
 ): Color {
+  // BIP110 violation takes highest priority - use pulsing orange
+  if (hasBIP110Violation(tx)) {
+    return getPulsingBIP110Color();
+  }
+  
   const rate = tx.fee / tx.vsize; // color by simple single-tx fee rate
   const levelIndex = colors.baseLevel(tx, rate, relativeTime || (Date.now() / 1000));
   const levelColor = colors.base[levelIndex] || colors.base[defaultMempoolFeeColors.length - 1];
@@ -194,6 +243,11 @@ export function ageColorFunction(
   relativeTime?: number,
   theme?: string,
 ): Color {
+  // BIP110 violation takes highest priority - use pulsing color, don't fade with age
+  if (hasBIP110Violation(tx)) {
+    return getPulsingBIP110Color();
+  }
+  
   if (tx.acc || tx.status === 'accelerated') {
     return auditColors.accelerated;
   }

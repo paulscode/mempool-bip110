@@ -8,6 +8,7 @@ import config from '../config';
 import { TransactionExtended } from '../mempool.interfaces';
 import { Common } from './common';
 import rbfCache from './rbf-cache';
+import bip110Cache from './bip110-cache';
 
 class DiskCache {
   private cacheSchemaVersion = 3;
@@ -138,6 +139,17 @@ class DiskCache {
       logger.warn('Error writing rbf data to cache file: ' + (e instanceof Error ? e.message : e));
       this.isWritingCache = false;
     }
+
+    // Save BIP110 violation stats cache alongside other caches
+    try {
+      if (sync) {
+        bip110Cache.saveToDiskSync();
+      } else {
+        await bip110Cache.saveToDisk();
+      }
+    } catch (e) {
+      logger.warn('Error writing BIP110 cache: ' + (e instanceof Error ? e.message : e));
+    }
   }
 
   wipeCache(): void {
@@ -227,6 +239,20 @@ class DiskCache {
       if (!this.ignoreBlocksCache) {
         blocks.setBlocks(data.blocks);
         blocks.setBlockSummaries(data.blockSummaries || []);
+        // Seed BIP110 cache with data from restored blocks
+        if (data.blocks?.length) {
+          for (const block of data.blocks) {
+            if (block?.extras && block.height != null) {
+              bip110Cache.setBlockStats(
+                block.height,
+                block.extras.bip110ViolationCount || 0,
+                block.extras.bip110ViolationWeight || 0
+              );
+              bip110Cache.updateScanHeight(block.height);
+            }
+          }
+          logger.debug(`Seeded BIP110 cache with ${data.blocks.length} blocks from disk cache`);
+        }
       } else {
         logger.info('Re-saving cache with empty recent blocks data');
         await this.$saveCacheToDisk(true);

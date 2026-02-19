@@ -5,6 +5,7 @@ import memPool from './mempool';
 import { BlockExtended, BlockExtension, BlockSummary, PoolTag, TransactionExtended, TransactionMinerInfo, CpfpSummary, MempoolTransactionExtended, TransactionClassified, BlockAudit, TransactionAudit } from '../mempool.interfaces';
 import { Common } from './common';
 import diskCache from './disk-cache';
+import bip110Cache from './bip110-cache';
 import transactionUtils from './transaction-utils';
 import bitcoinClient from './bitcoin/bitcoin-client';
 import { IBitcoinApi } from './bitcoin/bitcoin-api.interface';
@@ -47,6 +48,7 @@ class Blocks {
   private newBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: TransactionExtended[]) => void)[] = [];
   private newAsyncBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: MempoolTransactionExtended[]) => Promise<void>)[] = [];
   private classifyingBlocks: boolean = false;
+  private bip110ScannerRunning: boolean = false;
 
   private mainLoopTimeout: number = 120000;
 
@@ -1065,6 +1067,16 @@ class Blocks {
         this.blockSummaries = this.blockSummaries.slice(-config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
       }
 
+      // Persist BIP110 violation stats to the BIP110 cache
+      if (blockExtended.extras) {
+        bip110Cache.setBlockStats(
+          blockExtended.height,
+          blockExtended.extras.bip110ViolationCount || 0,
+          blockExtended.extras.bip110ViolationWeight || 0
+        );
+        bip110Cache.updateScanHeight(blockExtended.height);
+      }
+
       if (this.newBlockCallbacks.length) {
         this.newBlockCallbacks.forEach((cb) => cb(blockExtended, txIds, transactions));
       }
@@ -1266,6 +1278,19 @@ class Blocks {
       await BlocksSummariesRepository.$saveTransactions(height, hash, summary.transactions, summaryVersion);
     }
 
+    // Save BIP110 violation stats to persistent cache when block summaries are computed
+    if (height != null && summary?.transactions?.length) {
+      let violationCount = 0;
+      let violationWeight = 0;
+      for (const tx of summary.transactions) {
+        if (Common.hasAnyBIP110Violation(tx.flags)) {
+          violationCount++;
+          violationWeight += (tx.vsize || 0) * 4;
+        }
+      }
+      bip110Cache.setBlockStats(height, violationCount, violationWeight);
+    }
+
     return summary.transactions;
   }
 
@@ -1345,6 +1370,16 @@ class Blocks {
       } else {
         // Using indexing (find by height, index on the fly, save in database)
         block = await this.$indexBlock(currentHeight);
+        // Inject BIP110 violation stats from persistent cache
+        // ($indexBlock only fetches coinbase, so violation data is always 0 without this)
+        if (block.extras) {
+          block.extras.bip110Signaling = Common.isSignalingBIP110(block.version);
+          const cachedStats = bip110Cache.getBlockStats(currentHeight);
+          if (cachedStats) {
+            block.extras.bip110ViolationCount = cachedStats.count;
+            block.extras.bip110ViolationWeight = cachedStats.weight;
+          }
+        }
         returnBlocks.push(block);
       }
       currentHeight--;
@@ -1575,6 +1610,129 @@ class Blocks {
       logger.debug(`Unable to retrieve list of blocks for definition hash ${definitionHash} from db (exception: ${e})`);
       return null;
     }
+  }
+
+  /**
+   * Background scanner for BIP110 violation stats.
+   *
+   * Progressively scans historic blocks (from tip downward) to compute
+   * BIP110 violation counts for the persistent cache. This allows the UI
+   * to show violation decorations on historic blocks even though
+   * $indexBlock() only fetches the coinbase for performance reasons.
+   *
+   * Uses getblock(hash, 2) RPC to fetch full verbose blocks, then runs
+   * the same BIP110 analysis as the real-time block processing path.
+   *
+   * @param delayMs Milliseconds to wait between processing blocks (throttle)
+   */
+  public async $startBIP110BackgroundScan(delayMs: number = 2000): Promise<void> {
+    if (this.bip110ScannerRunning) {
+      return;
+    }
+    this.bip110ScannerRunning = true;
+
+    // Wait for the main loop to establish the chain tip
+    while (this.currentBlockHeight <= 0) {
+      await Common.sleep$(5000);
+    }
+
+    // Start scanning from just below the memory cache
+    const memCacheBottom = this.currentBlockHeight - (config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
+    let scanHeight = bip110Cache.getScanHeight();
+    if (scanHeight === Infinity || scanHeight > memCacheBottom) {
+      scanHeight = memCacheBottom;
+    }
+
+    // Make sure the memory cache blocks are marked as scanned
+    bip110Cache.updateScanHeight(memCacheBottom);
+
+    logger.info(`BIP110 background scanner starting from height ${scanHeight}, working downward`);
+
+    let consecutiveErrors = 0;
+
+    while (scanHeight >= 0) {
+      // Check if this height was already scanned
+      if (bip110Cache.isScanned(scanHeight)) {
+        scanHeight--;
+        continue;
+      }
+
+      try {
+        const blockHash = await bitcoinApi.$getBlockHash(scanHeight);
+
+        // Fetch verbose block with all transactions via Core RPC
+        const verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
+
+        // Count BIP110 violations directly from the verbose block data
+        let violationCount = 0;
+        let violationWeight = 0;
+
+        for (const vtx of verboseBlock.tx) {
+          // Convert to esplora-like format for BIP110 analysis
+          const esploraLikeTx: IEsploraApi.Transaction = {
+            txid: vtx.txid,
+            version: vtx.version,
+            locktime: vtx.locktime,
+            size: vtx.size,
+            weight: vtx.weight,
+            fee: vtx.fee ? Math.round(vtx.fee * 100000000) : 0,
+            vin: vtx.vin.map(vin => ({
+              is_coinbase: !!vin.coinbase,
+              prevout: null,
+              scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
+              scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
+              sequence: vin.sequence,
+              txid: vin.txid || '',
+              vout: vin.vout || 0,
+              witness: vin.txinwitness || [],
+              inner_redeemscript_asm: '',
+              inner_witnessscript_asm: '',
+            })),
+            vout: vtx.vout.map(vout => ({
+              value: Math.round(vout.value * 100000000),
+              scriptpubkey: vout.scriptPubKey.hex,
+              scriptpubkey_address: vout.scriptPubKey.address || (vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '') || '',
+              scriptpubkey_asm: vout.scriptPubKey.hex ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
+              scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
+            })),
+            status: { confirmed: true },
+          };
+          const extTx = transactionUtils.extendTransaction(esploraLikeTx);
+          const flags = Common.getBIP110Flags(extTx);
+          if (flags !== 0n) {
+            violationCount++;
+            violationWeight += vtx.weight || 0;
+          }
+        }
+
+        bip110Cache.setBlockStats(scanHeight, violationCount, violationWeight);
+        bip110Cache.updateScanHeight(scanHeight);
+        consecutiveErrors = 0;
+
+        // Log progress periodically
+        if (scanHeight % 100 === 0) {
+          logger.debug(`BIP110 scanner: scanned height ${scanHeight}, ${bip110Cache.getViolationBlockCount()} blocks with violations so far`);
+          // Persist cache periodically during scanning
+          await bip110Cache.saveToDisk();
+        }
+
+      } catch (e) {
+        consecutiveErrors++;
+        logger.warn(`BIP110 scanner: failed to scan block ${scanHeight}: ${e instanceof Error ? e.message : e}`);
+        if (consecutiveErrors > 10) {
+          logger.warn('BIP110 scanner: too many consecutive errors, pausing for 60 seconds');
+          await Common.sleep$(60000);
+          consecutiveErrors = 0;
+        }
+      }
+
+      scanHeight--;
+      await Common.sleep$(delayMs);
+    }
+
+    logger.notice(`BIP110 background scan complete: ${bip110Cache.getViolationBlockCount()} blocks with violations`);
+    await bip110Cache.saveToDisk();
+    this.bip110ScannerRunning = false;
   }
 }
 

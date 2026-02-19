@@ -1169,6 +1169,18 @@ class BlocksRepository {
           }
         }
       }
+    } else {
+      // Fall back to BIP110 persistent cache when block summaries indexing is not enabled
+      try {
+        const bip110Cache = (await import('../api/bip110-cache')).default;
+        const cachedStats = bip110Cache.getBlockStats(dbBlk.height);
+        if (cachedStats) {
+          extras.bip110ViolationCount = cachedStats.count;
+          extras.bip110ViolationWeight = cachedStats.weight;
+        }
+      } catch (e) {
+        // BIP110 cache not available, violation counts will be 0
+      }
     }
 
     blk.extras = <BlockExtension>extras;

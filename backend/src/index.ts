@@ -9,6 +9,7 @@ import config from './config';
 import blocks from './api/blocks';
 import memPool from './api/mempool';
 import diskCache from './api/disk-cache';
+import bip110Cache from './api/bip110-cache';
 import statistics from './api/statistics/statistics';
 import websocketHandler from './api/websocket-handler';
 import logger from './logger';
@@ -170,6 +171,8 @@ class Server {
       } else if (config.REDIS.ENABLED) {
         await redisCache.$loadCache();
       }
+      // Load BIP110 violation stats cache
+      bip110Cache.loadFromDisk();
     }
 
     if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED && cluster.isPrimary) {
@@ -199,6 +202,10 @@ class Server {
 
     if (config.MEMPOOL.ENABLED) {
       this.runMainUpdateLoop();
+      // Start BIP110 background scanner to progressively analyze historic blocks
+      blocks.$startBIP110BackgroundScan().catch(e => {
+        logger.warn('BIP110 background scan failed: ' + (e instanceof Error ? e.message : e));
+      });
     }
 
     setInterval(() => { this.healthCheck(); }, 2500);

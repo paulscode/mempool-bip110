@@ -1,0 +1,11 @@
+**/node_modules
+**/.git
+**/dist
+**/cache
+**/.angular
+**/.env
+**/*.swp
+**/*.swo
+**/cypress
+**/coverage
+**/.nyc_output

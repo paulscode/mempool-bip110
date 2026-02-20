@@ -49,6 +49,7 @@ class Blocks {
   private newAsyncBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: MempoolTransactionExtended[]) => Promise<void>)[] = [];
   private classifyingBlocks: boolean = false;
   private bip110ScannerRunning: boolean = false;
+  private noTxIndex: boolean = false;
 
   private mainLoopTimeout: number = 120000;
 
@@ -926,13 +927,22 @@ class Blocks {
       const verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
       const block = BitcoinApi.convertBlock(verboseBlock);
       const txIds: string[] = verboseBlock.tx.map(tx => tx.txid);
-      const transactions = await this.$getTransactionsExtended(blockHash, block.height, block.timestamp, false, txIds, false, true) as MempoolTransactionExtended[];
 
-      // fill in missing transaction fee data from verboseBlock
-      for (let i = 0; i < transactions.length; i++) {
-        if (!transactions[i].fee && transactions[i].txid === verboseBlock.tx[i].txid) {
-          transactions[i].fee = (verboseBlock.tx[i].fee * 100_000_000) || 0;
+      // Try to get extended transactions. If getRawTransaction fails (no txindex),
+      // fall back to converting directly from the verbose block data.
+      let transactions: MempoolTransactionExtended[];
+      try {
+        transactions = await this.$getTransactionsExtended(blockHash, block.height, block.timestamp, false, txIds, true, true) as MempoolTransactionExtended[];
+        // fill in missing transaction fee data from verboseBlock
+        for (let i = 0; i < transactions.length; i++) {
+          if (!transactions[i].fee && transactions[i].txid === verboseBlock.tx[i].txid) {
+            transactions[i].fee = (verboseBlock.tx[i].fee * 100_000_000) || 0;
+          }
         }
+      } catch (e) {
+        logger.debug(`$getTransactionsExtended failed for block ${this.currentBlockHeight}, using verbose block data directly: ${e instanceof Error ? e.message : e}`);
+        this.noTxIndex = true;
+        transactions = BitcoinApi.convertVerboseBlockTransactions(verboseBlock, block.height);
       }
 
       let accelerations = Object.values(mempool.getAccelerations());
@@ -1136,8 +1146,31 @@ class Blocks {
     }
 
     const blockHash = await bitcoinApi.$getBlockHash(height);
-    const block: IEsploraApi.Block = await bitcoinApi.$getBlock(blockHash);
-    const transactions = await this.$getTransactionsExtended(blockHash, block.height, block.timestamp, true);
+
+    // Single RPC: getBlock(hash, 1) returns both block header AND txid list,
+    // avoiding separate $getBlock + $getTxIdsForBlock calls (each was getBlock(hash,1)).
+    const rawBlock = await bitcoinClient.getBlock(blockHash, 1);
+    const block: IEsploraApi.Block = BitcoinApi.convertBlock(rawBlock);
+    const txIds: string[] = rawBlock.tx as unknown as string[]; // verbosity 1 returns txid strings
+
+    let transactions: TransactionExtended[];
+
+    if (this.noTxIndex) {
+      // Already detected no txindex — skip straight to block-hash-hinted coinbase lookup
+      transactions = await this.$getCoinbaseViaBlockHash(txIds, blockHash, block);
+    } else {
+      try {
+        // Try standard path (requires txindex or esplora backend)
+        const coinbase = await transactionUtils.$getTransactionExtendedRetry(txIds[0]);
+        transactions = [coinbase];
+      } catch (e) {
+        // First failure — flag for all subsequent calls
+        logger.info('txindex unavailable, using getRawTransaction with block hash hint for coinbase lookups');
+        this.noTxIndex = true;
+        transactions = await this.$getCoinbaseViaBlockHash(txIds, blockHash, block);
+      }
+    }
+
     const blockExtended = await this.$getBlockExtended(block, transactions);
 
     if (Common.indexingEnabled()) {
@@ -1145,6 +1178,52 @@ class Blocks {
     }
 
     return blockExtended;
+  }
+
+  /**
+   * Fetch the coinbase transaction using getRawTransaction with block hash hint.
+   * This works without txindex because the block hash tells bitcoind where to find the tx.
+   */
+  private async $getCoinbaseViaBlockHash(
+    txIds: string[],
+    blockHash: string,
+    block: IEsploraApi.Block,
+  ): Promise<TransactionExtended[]> {
+    if (txIds.length === 0) {
+      return [];
+    }
+    const rawCoinbase: IBitcoinApi.Transaction = await bitcoinClient.getRawTransaction(txIds[0], true, blockHash);
+    const esploraVout = rawCoinbase.vout.map((vout) => ({
+      value: Math.round(vout.value * 100000000),
+      scriptpubkey: vout.scriptPubKey.hex,
+      scriptpubkey_address: vout.scriptPubKey?.address || (vout.scriptPubKey?.addresses ? vout.scriptPubKey.addresses[0] : '') || '',
+      scriptpubkey_asm: vout.scriptPubKey?.hex ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
+      scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
+    }));
+    const esploraVin = rawCoinbase.vin.map((vin) => ({
+      is_coinbase: !!vin.coinbase,
+      prevout: null,
+      scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
+      scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
+      sequence: vin.sequence,
+      txid: vin.txid || '',
+      vout: vin.vout || 0,
+      witness: vin.txinwitness || [],
+      inner_redeemscript_asm: '',
+      inner_witnessscript_asm: '',
+    }));
+    const esploraTransaction: IEsploraApi.Transaction = {
+      txid: rawCoinbase.txid,
+      version: rawCoinbase.version,
+      locktime: rawCoinbase.locktime,
+      size: rawCoinbase.size,
+      weight: rawCoinbase.weight,
+      fee: 0,
+      vin: esploraVin,
+      vout: esploraVout,
+      status: { confirmed: true, block_height: block.height, block_hash: blockHash, block_time: block.timestamp },
+    };
+    return [transactionUtils.extendTransaction(esploraTransaction)];
   }
 
   public async $indexStaleBlock(hash: string): Promise<BlockExtended> {
@@ -1326,6 +1405,55 @@ class Blocks {
   }
 
   /**
+   * Compute BIP110 violation stats for a single block by fetching it
+   * from Bitcoin Core with full verbosity and analyzing all transactions.
+   */
+  public async $computeBIP110StatsForBlock(blockHash: string): Promise<{ count: number; weight: number }> {
+    const verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
+    let count = 0;
+    let weight = 0;
+
+    for (const vtx of verboseBlock.tx) {
+      const esploraLikeTx: IEsploraApi.Transaction = {
+        txid: vtx.txid,
+        version: vtx.version,
+        locktime: vtx.locktime,
+        size: vtx.size,
+        weight: vtx.weight,
+        fee: vtx.fee ? Math.round(vtx.fee * 100000000) : 0,
+        vin: vtx.vin.map(vin => ({
+          is_coinbase: !!vin.coinbase,
+          prevout: null,
+          scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
+          scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
+          sequence: vin.sequence,
+          txid: vin.txid || '',
+          vout: vin.vout || 0,
+          witness: vin.txinwitness || [],
+          inner_redeemscript_asm: '',
+          inner_witnessscript_asm: '',
+        })),
+        vout: vtx.vout.map(vout => ({
+          value: Math.round(vout.value * 100000000),
+          scriptpubkey: vout.scriptPubKey.hex,
+          scriptpubkey_address: vout.scriptPubKey.address || (vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '') || '',
+          scriptpubkey_asm: vout.scriptPubKey.hex ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
+          scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
+        })),
+        status: { confirmed: true },
+      };
+      const extTx = transactionUtils.extendTransaction(esploraLikeTx);
+      const flags = Common.getBIP110Flags(extTx);
+      if (flags !== 0n) {
+        count++;
+        weight += vtx.weight || 0;
+      }
+    }
+
+    return { count, weight };
+  }
+
+  /**
    * Get 15 blocks
    * 
    * Internally this function uses two methods to get the blocks, and
@@ -1378,6 +1506,16 @@ class Blocks {
           if (cachedStats) {
             block.extras.bip110ViolationCount = cachedStats.count;
             block.extras.bip110ViolationWeight = cachedStats.weight;
+          } else {
+            // Not yet scanned — compute on the fly from the verbose block
+            try {
+              const stats = await this.$computeBIP110StatsForBlock(block.id);
+              block.extras.bip110ViolationCount = stats.count;
+              block.extras.bip110ViolationWeight = stats.weight;
+              bip110Cache.setBlockStats(currentHeight, stats.count, stats.weight);
+            } catch (e) {
+              logger.debug(`Failed to compute BIP110 stats for block ${currentHeight}: ${e instanceof Error ? e.message : e}`);
+            }
           }
         }
         returnBlocks.push(block);
@@ -1623,96 +1761,79 @@ class Blocks {
    * Uses getblock(hash, 2) RPC to fetch full verbose blocks, then runs
    * the same BIP110 analysis as the real-time block processing path.
    *
+   * Only scans blocks from Taproot activation (709,632) onward, since
+   * BIP110 violations require tapscript spends which are impossible
+   * before Taproot.
+   *
+   * Progress is shown via the loadingIndicators system (visible as
+   * "BIP110 Scan (XX%)" in the frontend).
+   *
    * @param delayMs Milliseconds to wait between processing blocks (throttle)
    */
-  public async $startBIP110BackgroundScan(delayMs: number = 2000): Promise<void> {
+  public async $startBIP110BackgroundScan(delayMs: number = 500): Promise<void> {
     if (this.bip110ScannerRunning) {
       return;
     }
     this.bip110ScannerRunning = true;
+
+    // Taproot activation height — no BIP110 violations are possible before this
+    const TAPROOT_ACTIVATION = 709632;
 
     // Wait for the main loop to establish the chain tip
     while (this.currentBlockHeight <= 0) {
       await Common.sleep$(5000);
     }
 
-    // Start scanning from just below the memory cache
-    const memCacheBottom = this.currentBlockHeight - (config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
-    let scanHeight = bip110Cache.getScanHeight();
-    if (scanHeight === Infinity || scanHeight > memCacheBottom) {
-      scanHeight = memCacheBottom;
-    }
+    // Always start scanning from just below the memory cache so we never
+    // leave a gap between the memory cache and previously-scanned blocks.
+    // Already-scanned blocks will be skipped quickly via isScanned().
+    const chainTip = this.currentBlockHeight;
+    const memCacheBottom = chainTip - (config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
 
-    // Make sure the memory cache blocks are marked as scanned
-    bip110Cache.updateScanHeight(memCacheBottom);
+    // DO NOT blanket-mark memCacheBottom as scanned — only blocks with actual
+    // violation data in the cache should be treated as scanned.  The scanner
+    // will process any un-scanned blocks in this range on its way down.
+    let scanHeight = memCacheBottom;
 
-    logger.info(`BIP110 background scanner starting from height ${scanHeight}, working downward`);
+    logger.info(`BIP110 background scanner starting from height ${scanHeight}, working downward to ${TAPROOT_ACTIVATION}`);
+
+    // Progress is based on distance from chainTip to TAPROOT_ACTIVATION (not block 0)
+    const totalRange = chainTip - TAPROOT_ACTIVATION;
+    const calcProgress = (h: number): number => {
+      if (totalRange <= 0) return 99;
+      return Math.min(99, Math.round(((chainTip - h) / totalRange) * 100));
+    };
+    loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
 
     let consecutiveErrors = 0;
+    let skippedCount = 0;
 
-    while (scanHeight >= 0) {
+    while (scanHeight >= TAPROOT_ACTIVATION) {
       // Check if this height was already scanned
       if (bip110Cache.isScanned(scanHeight)) {
+        skippedCount++;
         scanHeight--;
+        // Batch-skip: yield and update progress every 10000 blocks
+        if (skippedCount % 10000 === 0) {
+          loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
+          await Common.sleep$(10);
+        }
         continue;
       }
+      skippedCount = 0;
 
       try {
         const blockHash = await bitcoinApi.$getBlockHash(scanHeight);
+        const stats = await this.$computeBIP110StatsForBlock(blockHash);
 
-        // Fetch verbose block with all transactions via Core RPC
-        const verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
-
-        // Count BIP110 violations directly from the verbose block data
-        let violationCount = 0;
-        let violationWeight = 0;
-
-        for (const vtx of verboseBlock.tx) {
-          // Convert to esplora-like format for BIP110 analysis
-          const esploraLikeTx: IEsploraApi.Transaction = {
-            txid: vtx.txid,
-            version: vtx.version,
-            locktime: vtx.locktime,
-            size: vtx.size,
-            weight: vtx.weight,
-            fee: vtx.fee ? Math.round(vtx.fee * 100000000) : 0,
-            vin: vtx.vin.map(vin => ({
-              is_coinbase: !!vin.coinbase,
-              prevout: null,
-              scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
-              scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
-              sequence: vin.sequence,
-              txid: vin.txid || '',
-              vout: vin.vout || 0,
-              witness: vin.txinwitness || [],
-              inner_redeemscript_asm: '',
-              inner_witnessscript_asm: '',
-            })),
-            vout: vtx.vout.map(vout => ({
-              value: Math.round(vout.value * 100000000),
-              scriptpubkey: vout.scriptPubKey.hex,
-              scriptpubkey_address: vout.scriptPubKey.address || (vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '') || '',
-              scriptpubkey_asm: vout.scriptPubKey.hex ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
-              scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
-            })),
-            status: { confirmed: true },
-          };
-          const extTx = transactionUtils.extendTransaction(esploraLikeTx);
-          const flags = Common.getBIP110Flags(extTx);
-          if (flags !== 0n) {
-            violationCount++;
-            violationWeight += vtx.weight || 0;
-          }
-        }
-
-        bip110Cache.setBlockStats(scanHeight, violationCount, violationWeight);
+        bip110Cache.setBlockStats(scanHeight, stats.count, stats.weight);
         bip110Cache.updateScanHeight(scanHeight);
         consecutiveErrors = 0;
 
-        // Log progress periodically
+        // Update progress indicator and persist periodically
         if (scanHeight % 100 === 0) {
-          logger.debug(`BIP110 scanner: scanned height ${scanHeight}, ${bip110Cache.getViolationBlockCount()} blocks with violations so far`);
-          // Persist cache periodically during scanning
+          loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
+          logger.debug(`BIP110 scanner: height ${scanHeight}, ${bip110Cache.getScannedBlockCount()} scanned, ${bip110Cache.getViolationBlockCount()} with violations`);
           await bip110Cache.saveToDisk();
         }
 
@@ -1730,7 +1851,9 @@ class Blocks {
       await Common.sleep$(delayMs);
     }
 
-    logger.notice(`BIP110 background scan complete: ${bip110Cache.getViolationBlockCount()} blocks with violations`);
+    // Mark scan complete — setProgress(100) removes the indicator from the UI
+    loadingIndicators.setProgress('bip110-scan', 100);
+    logger.notice(`BIP110 background scan complete: ${bip110Cache.getScannedBlockCount()} blocks scanned, ${bip110Cache.getViolationBlockCount()} with violations`);
     await bip110Cache.saveToDisk();
     this.bip110ScannerRunning = false;
   }

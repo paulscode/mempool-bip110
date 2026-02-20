@@ -15,6 +15,7 @@ import config from '../config';
 import transactionUtils from './transaction-utils';
 import rbfCache, { ReplacementInfo } from './rbf-cache';
 import difficultyAdjustment from './difficulty-adjustment';
+import bip110Deployment from './bip110-deployment';
 import feeApi from './fee-api';
 import BlocksRepository from '../repositories/BlocksRepository';
 import BlocksAuditsRepository from '../repositories/BlocksAuditsRepository';
@@ -103,6 +104,7 @@ class WebsocketHandler {
       'loadingIndicators': loadingIndicators.getLoadingIndicators(),
       'da': da?.previousTime ? da : undefined,
       'fees': feeApi.getRecommendedFee(),
+      'bip110deployment': bip110Deployment.getDeploymentInfo(),
     });
   }
 
@@ -1140,6 +1142,9 @@ class WebsocketHandler {
     const fees = feeApi.getRecommendedFee();
     const mempoolInfo = memPool.getMempoolInfo();
 
+    // Update BIP-110 deployment state
+    bip110Deployment.onNewBlock(block.height);
+
     // pre-compute address transactions
     const addressCache = this.makeAddressCache(transactions);
 
@@ -1151,6 +1156,7 @@ class WebsocketHandler {
       'loadingIndicators': loadingIndicators.getLoadingIndicators(),
       'da': da?.previousTime ? da : undefined,
       'fees': fees,
+      'bip110deployment': bip110Deployment.getDeploymentInfo(),
     });
 
     const mBlocksWithTransactions = mempoolBlocks.getMempoolBlocksWithTransactions();

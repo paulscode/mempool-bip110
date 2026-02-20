@@ -60,9 +60,23 @@ export class CacheService {
   }
 
   addBlockToCache(block: BlockExtended) {
+    // If BIP110 violation data is missing (null/undefined rather than 0),
+    // the scanner hasn't reached this block yet. Allow re-fetching later
+    // so decorations appear once the scanner catches up.
+    const hasBip110Data = block?.extras?.bip110ViolationCount != null;
+
     if (!this.blockHashCache[block.id]) {
-      this.blockHashCache[block.id] = block;
-      this.blockCache[block.height] = block;
+      if (hasBip110Data) {
+        this.blockHashCache[block.id] = block;
+        this.blockCache[block.height] = block;
+        this.bumpBlockPriority(block.height);
+      }
+      // else: don't cache — next scroll will re-fetch with (hopefully) scanned data
+    } else if (!hasBip110Data) {
+      // Already cached but missing BIP110 data — keep existing cache entry
+      // (it might have BIP110 data from an earlier fetch)
+    } else {
+      // Already cached with BIP110 data — just bump priority
       this.bumpBlockPriority(block.height);
     }
   }

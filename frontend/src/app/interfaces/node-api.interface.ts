@@ -47,6 +47,25 @@ export interface RbfTree extends RbfInfo {
   replacedBy?: RbfTransaction;
 }
 
+export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active';
+
+export interface Bip110DeploymentInfo {
+  state: Bip110State;
+  currentHeight: number;
+  periodSignaling: number;
+  periodBlocks: number;
+  periodStartHeight: number;
+  threshold: number;
+  signalingPercent: number;
+  thresholdReached: boolean;
+  blocksUntilMandatory: number;
+  inMandatorySignaling: boolean;
+  activationHeight: number | null;
+  expiryHeight: number | null;
+  blocksUntilExpiry: number;
+  rulesExpired: boolean;
+}
+
 export interface DifficultyAdjustment {
   progressPercent: number;
   difficultyChange: number;

@@ -68,6 +68,7 @@ import { FeesBoxComponent } from '@components/fees-box/fees-box.component';
 import { DifficultyComponent } from '@components/difficulty/difficulty.component';
 import { DifficultyTooltipComponent } from '@components/difficulty/difficulty-tooltip.component';
 import { DifficultyMiningComponent } from '@components/difficulty-mining/difficulty-mining.component';
+import { Bip110DeploymentComponent } from '@components/bip110-deployment/bip110-deployment.component';
 import { BalanceWidgetComponent } from '@components/balance-widget/balance-widget.component';
 import { AddressTransactionsWidgetComponent } from '@components/address-transactions-widget/address-transactions-widget.component';
 import { RbfTimelineComponent } from '@components/rbf-timeline/rbf-timeline.component';
@@ -188,6 +189,7 @@ import { GithubLogin } from '../components/github-login.component/github-login.c
     DifficultyComponent,
     DifficultyMiningComponent,
     DifficultyTooltipComponent,
+    Bip110DeploymentComponent,
     BalanceWidgetComponent,
     AddressTransactionsWidgetComponent,
     RbfTimelineComponent,
@@ -336,6 +338,7 @@ import { GithubLogin } from '../components/github-login.component/github-login.c
     DifficultyComponent,
     DifficultyMiningComponent,
     DifficultyTooltipComponent,
+    Bip110DeploymentComponent,
     BalanceWidgetComponent,
     AddressTransactionsWidgetComponent,
     RbfTimelineComponent,

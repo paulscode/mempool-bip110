@@ -4,7 +4,7 @@ import { IBitcoinApi, SubmitPackageResult, TestMempoolAcceptResult } from './bit
 import { IEsploraApi } from './esplora-api.interface';
 import blocks from '../blocks';
 import mempool from '../mempool';
-import { TransactionExtended } from '../../mempool.interfaces';
+import { TransactionExtended, MempoolTransactionExtended } from '../../mempool.interfaces';
 import transactionUtils from '../transaction-utils';
 
 class BitcoinApi implements AbstractBitcoinApi {
@@ -415,6 +415,60 @@ class BitcoinApi implements AbstractBitcoinApi {
       transaction.fee = parseFloat((totalIn - totalOut).toFixed(8));
     }
     return transaction;
+  }
+
+  /**
+   * Convert verbose block transactions to extended transactions without
+   * needing getRawTransaction (works without txindex).
+   */
+  public static convertVerboseBlockTransactions(
+    verboseBlock: IBitcoinApi.VerboseBlock,
+    blockHeight: number,
+  ): MempoolTransactionExtended[] {
+    return verboseBlock.tx.map((tx: IBitcoinApi.VerboseTransaction) => {
+      const esploraVout = tx.vout.map((vout) => ({
+        value: Math.round(vout.value * 100000000),
+        scriptpubkey: vout.scriptPubKey.hex,
+        scriptpubkey_address: vout.scriptPubKey && vout.scriptPubKey.address ? vout.scriptPubKey.address
+          : vout.scriptPubKey.addresses ? vout.scriptPubKey.addresses[0] : '',
+        scriptpubkey_asm: vout.scriptPubKey.asm ? transactionUtils.convertScriptSigAsm(vout.scriptPubKey.hex) : '',
+        scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(vout.scriptPubKey.type),
+      }));
+
+      const esploraVin = tx.vin.map((vin) => ({
+        is_coinbase: !!vin.coinbase,
+        prevout: null,
+        scriptsig: vin.scriptSig && vin.scriptSig.hex || vin.coinbase || '',
+        scriptsig_asm: vin.scriptSig && transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) || '',
+        sequence: vin.sequence,
+        txid: vin.txid || '',
+        vout: vin.vout || 0,
+        witness: vin.txinwitness || [],
+        inner_redeemscript_asm: '',
+        inner_witnessscript_asm: '',
+      }));
+
+      const fee = tx.fee != null ? Math.round(tx.fee * 100000000) : 0;
+
+      const esploraTransaction: IEsploraApi.Transaction = {
+        txid: tx.txid,
+        version: tx.version,
+        locktime: tx.locktime,
+        size: tx.size,
+        weight: tx.weight,
+        fee,
+        vin: esploraVin,
+        vout: esploraVout,
+        status: {
+          confirmed: true,
+          block_height: blockHeight,
+          block_hash: verboseBlock.hash,
+          block_time: verboseBlock.time,
+        },
+      };
+
+      return transactionUtils.extendMempoolTransaction(esploraTransaction);
+    });
   }
 
   public startHealthChecks(): void {};

@@ -778,6 +778,12 @@ export class Common {
    * very large inscription Tapscripts scanned by the background scanner. Only
    * OP_PUSHDATA2/4 can declare a payload > 256 bytes (direct pushes ≤ 75 and
    * OP_PUSHDATA1 ≤ 255), but all push forms are handled for correctness.
+   *
+   * A push only counts if its declared data actually fits in the script. This
+   * is essential: callers may pass items that are not really scripts (e.g. a
+   * pubkey or signature when the spend type is inferred without prevout data),
+   * and a stray 0x4d/0x4e byte in such data must not be mistaken for a large
+   * OP_PUSHDATA whose payload isn't even present.
    */
   static scriptHasLargePush(scriptHex: string): boolean {
     if (!scriptHex) return false;
@@ -791,26 +797,31 @@ export class Common {
     let i = 0;
     while (i < buf.length) {
       const op = buf[i];
+      let headerLen: number;
+      let dataLen: number;
       if (op >= 0x01 && op <= 0x4b) {
-        i += 1 + op;
+        headerLen = 1;
+        dataLen = op;
       } else if (op === 0x4c) { // OP_PUSHDATA1
-        if (i + 1 >= buf.length) break;
-        const n = buf.readUInt8(i + 1);
-        if (n > BIP110_MAX_PUSHDATA_SIZE) return true;
-        i += 2 + n;
+        if (i + 2 > buf.length) break;
+        headerLen = 2;
+        dataLen = buf.readUInt8(i + 1);
       } else if (op === 0x4d) { // OP_PUSHDATA2
-        if (i + 2 >= buf.length) break;
-        const n = buf.readUInt16LE(i + 1);
-        if (n > BIP110_MAX_PUSHDATA_SIZE) return true;
-        i += 3 + n;
+        if (i + 3 > buf.length) break;
+        headerLen = 3;
+        dataLen = buf.readUInt16LE(i + 1);
       } else if (op === 0x4e) { // OP_PUSHDATA4
-        if (i + 4 >= buf.length) break;
-        const n = buf.readUInt32LE(i + 1);
-        if (n > BIP110_MAX_PUSHDATA_SIZE) return true;
-        i += 5 + n;
+        if (i + 5 > buf.length) break;
+        headerLen = 5;
+        dataLen = buf.readUInt32LE(i + 1);
       } else {
         i += 1; // non-push opcode
+        continue;
       }
+      // Only a real push (whose declared data is actually present) counts.
+      if (i + headerLen + dataLen > buf.length) break;
+      if (dataLen > BIP110_MAX_PUSHDATA_SIZE) return true;
+      i += headerLen + dataLen;
     }
     return false;
   }

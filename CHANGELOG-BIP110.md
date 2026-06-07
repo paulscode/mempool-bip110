@@ -71,6 +71,15 @@ violation-detection and deployment-tracking gaps found in a full spec audit.
 - **Rule 4 — annex now detected on inferred script-path spends.** The annex check
   fires when `prevout` is `v1_p2tr` *or* a Taproot script path is inferred from the
   witness, covering the Core RPC (`prevout`-less) path for script-path spends.
+- **Rule 2 — false-positive internal-push detection.** `scriptHasLargePush()`
+  flagged an `OP_PUSHDATA2/4` by its *declared* length without confirming the
+  payload bytes were actually present. When the prevout-less scanner treats a
+  spend's last witness item as a "witness script" (correct for P2WSH, but the item
+  is a pubkey for P2WPKH / a signature for key-path), a stray `0x4d`/`0x4e` byte in
+  that pubkey/signature was read as a large push, inflating block violation counts
+  (e.g. block 952707 went from 0 true violations to 124). The walker now requires a
+  push's declared data to fit within the script before counting it — matching the
+  old ASM-based behavior. Real `>256` pushes (data present) are still flagged.
 
 ### Known Gaps
 

@@ -39,10 +39,23 @@
               </div>
               <div class="threshold-line" [style.left.%]="(d.threshold / 2016) * 100"></div>
             </div>
-            <div class="progress-label">
-              {{ d.periodSignaling }}/{{ d.periodBlocks }} ({{ d.signalingPercent | number:'1.1-1' }}%)
-              &middot; need {{ d.threshold }}/2016
-            </div>
+            <button type="button" class="progress-label progress-label-link"
+                    *ngIf="d.recentSignalingBlocks?.length; else staticProgressLabel"
+                    (click)="openSignalingModal()"
+                    title="View recent BIP-110 signaling blocks">
+              <span>{{ d.periodSignaling }}/{{ d.periodBlocks }} ({{ d.signalingPercent | number:'1.1-1' }}%)
+              &middot; need {{ d.threshold }}/2016</span>
+              <svg class="progress-label-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line>
+                <circle cx="3.5" cy="6" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="12" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="18" r="1.2" fill="currentColor" stroke="none"></circle>
+              </svg>
+            </button>
+            <ng-template #staticProgressLabel>
+              <div class="progress-label">
+                {{ d.periodSignaling }}/{{ d.periodBlocks }} ({{ d.signalingPercent | number:'1.1-1' }}%)
+                &middot; need {{ d.threshold }}/2016
+              </div>
+            </ng-template>
           </div>
 
           <!-- Right: stats -->
@@ -101,6 +114,40 @@
                 <span class="stat-label">Start date (MTP)</span>
               </div>
             </ng-container>
+          </div>
+        </div>
+
+        <!-- Recent signaling blocks modal -->
+        <div class="signaling-modal-backdrop" *ngIf="signalingModalOpen" (click)="closeSignalingModal()">
+          <div class="signaling-modal" (click)="$event.stopPropagation()" role="dialog" aria-label="Recent BIP-110 signaling blocks">
+            <div class="signaling-modal-header">
+              <div class="signaling-modal-title">
+                <span class="signal-pulse-dot"></span>
+                Recent Signaling Blocks
+              </div>
+              <button type="button" class="signaling-modal-close" (click)="closeSignalingModal()" aria-label="Close">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>
+              </button>
+            </div>
+            <div class="signaling-modal-subtitle">Blocks mined signaling BIP-110 support (version bit 4)</div>
+            <div class="signaling-modal-list">
+              <a class="signaling-block-row"
+                 *ngFor="let block of d.recentSignalingBlocks; trackBy: trackByHeight"
+                 [routerLink]="['/block' | relativeUrl, block.height]"
+                 (click)="closeSignalingModal()">
+                <span class="signal-block-cube">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#0c130d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </span>
+                <span class="signal-block-height">{{ block.height | number }}</span>
+                <span class="signal-block-time" *ngIf="block.time">
+                  <app-time kind="since" [time]="block.time" [fastRender]="true"></app-time>
+                </span>
+                <svg class="signal-block-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </a>
+            </div>
+            <div class="signaling-modal-footer">
+              Showing the {{ d.recentSignalingBlocks.length }} most recent in this retarget period
+            </div>
           </div>
         </div>
 

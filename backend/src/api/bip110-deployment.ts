@@ -35,6 +35,7 @@ const MAX_ACTIVATION_HEIGHT = 965664;             // ACTIVE starts here if locke
 const ACTIVE_DURATION = 52416;                    // rules enforced for this many blocks after activation
 const SIGNALING_BIT = 4;                          // deployment 'reduced_data' version bit
 const SIGNALING_REFRESH_INTERVAL_MS = 30000;      // re-poll the signaling count while block indexing back-fills
+const RECENT_SIGNALING_LIMIT = 25;                // how many recent signaling blocks to surface in the UI
 
 export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active' | 'expired';
 
@@ -71,6 +72,9 @@ export interface Bip110DeploymentInfo {
   blocksUntilExpiry: number;
   /** Whether the rules have expired (active_duration elapsed) */
   rulesExpired: boolean;
+
+  /** Most recent BIP-110 signaling blocks in the current period (newest first) */
+  recentSignalingBlocks: { height: number; time: number }[];
 }
 
 class Bip110DeploymentApi {
@@ -82,6 +86,8 @@ class Bip110DeploymentApi {
   private periodSignalingCache: { periodStart: number; count: number } | null = null;
   /** height -> signaling, fetched cheaply from block headers for the current period */
   private periodSignals: Map<number, boolean> = new Map();
+  /** height -> block timestamp, for signaling blocks in the current period */
+  private signalingTimes: Map<number, number> = new Map();
   private periodSignalsStart: number = -1;
   /** Guard against overlapping header fills */
   private fillingSignals: boolean = false;
@@ -194,7 +200,25 @@ class Bip110DeploymentApi {
       expiryHeight,
       blocksUntilExpiry,
       rulesExpired,
+      recentSignalingBlocks: this.getRecentSignalingBlocks(periodStartHeight, RECENT_SIGNALING_LIMIT),
     };
+  }
+
+  /**
+   * The most recent signaling blocks in the current period (newest first).
+   */
+  private getRecentSignalingBlocks(periodStart: number, limit: number): { height: number; time: number }[] {
+    if (this.periodSignalsStart !== periodStart) {
+      return [];
+    }
+    const heights: number[] = [];
+    for (const [height, signaling] of this.periodSignals) {
+      if (signaling) {
+        heights.push(height);
+      }
+    }
+    heights.sort((a, b) => b - a);
+    return heights.slice(0, limit).map((height) => ({ height, time: this.signalingTimes.get(height) ?? 0 }));
   }
 
   /**
@@ -351,6 +375,7 @@ class Bip110DeploymentApi {
     try {
       if (this.periodSignalsStart !== periodStart) {
         this.periodSignals.clear();
+        this.signalingTimes.clear();
         this.periodSignalsStart = periodStart;
       }
 
@@ -373,8 +398,14 @@ class Bip110DeploymentApi {
           try {
             const hash = await bitcoinCoreApi.$getBlockHash(h);
             const headerHex = await bitcoinCoreApi.$getBlockHeader(hash);
+            // Block header layout: version(4) | prev(32) | merkle(32) | time(4) | ...
             const version = Buffer.from(headerHex.slice(0, 8), 'hex').readUInt32LE(0);
-            this.periodSignals.set(h, (version & (1 << SIGNALING_BIT)) !== 0);
+            const signaling = (version & (1 << SIGNALING_BIT)) !== 0;
+            this.periodSignals.set(h, signaling);
+            if (signaling) {
+              const time = Buffer.from(headerHex.slice(136, 144), 'hex').readUInt32LE(0);
+              this.signalingTimes.set(h, time);
+            }
           } catch (e) {
             // leave this height unset; it will be retried on the next refresh
           }

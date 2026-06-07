@@ -83,6 +83,11 @@
     background-color: #1b4332;
     color: #66bb6a;
   }
+
+  &.expired {
+    background-color: #3a2d33;
+    color: #b08b95;
+  }
 }
 
 .state-description {

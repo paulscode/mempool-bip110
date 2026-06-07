@@ -3,7 +3,93 @@
 All changes are relative to upstream mempool/mempool v3.2.1.
 See `bip-0110.mediawiki` in the project root for the full BIP specification.
 
-## [Unreleased] - 2026-02-06
+## 2026-06-07
+
+Reconciled the implementation with an updated `bip-0110.mediawiki` and closed the
+violation-detection and deployment-tracking gaps found in a full spec audit.
+
+### Spec sync
+
+- Updated `bip-0110.mediawiki` to the current upstream draft. Notable changes:
+  - Rule 2 now defines **"script argument witness items"** and explicitly exempts
+    witness scripts, Tapleaf scripts, control blocks, annexes, and Taproot
+    key-path signatures from the 256-byte witness limit.
+  - New terminal **EXPIRED** state: `ACTIVE → EXPIRED` once
+    `height >= activation_height + active_duration` (previously the deployment
+    stayed `ACTIVE` with rules conditionally unenforced).
+  - Added a GetBlockTemplate section (GBT name `reduced_data`, `vbrequired` during
+    mandatory signaling) and a more precise LOCKED_IN definition.
+
+### Changed
+
+- **Rule 2 — Script argument witness items (correctness):** the 256-byte witness
+  limit now applies only to *script argument witness items*, per the clarified
+  spec. Witness scripts, Tapleaf scripts, control blocks, annexes, and Taproot
+  key-path signatures are no longer flagged by the item-size check. This removes
+  false positives on large P2WSH witness scripts, large Tapleaf scripts
+  (ordinals/inscriptions), and valid 257-byte control blocks. Implemented in
+  `checkBIP110WitnessRules()` via an exempt-index set keyed on the spend type
+  (`prevout` when available, witness-structure inference otherwise).
+- **Rule 2 — Internal OP_PUSHDATA\* payloads:** the *contents* of exempt executing
+  scripts (BIP16 redeemScripts, witness scripts, Tapleaf scripts) are still
+  subject to Rule 2. New `scriptHasLargePush()` byte-walker scans these for
+  payloads exceeding 256 bytes; wired into `checkBIP110WitnessRules()` and
+  `checkBIP110ScriptSigRules()` (the redeemScript is no longer skipped entirely).
+- **Deployment — EXPIRED state:** added `'expired'` to `Bip110State` and the
+  `ACTIVE → EXPIRED` transition in `computeState()`; `rulesExpired` is now
+  `state === 'expired'`. Mirrored in the frontend (`Bip110State`,
+  `bip110-deployment.component.html` switch cases, `&.expired` badge style).
+- **Deployment — full-period signaling count:** signaling is now counted over the
+  entire 2016-block retarget period from the database
+  (`BlocksRepository.$countSignalingBlocks()`), cached and refreshed
+  asynchronously so the synchronous `getDeploymentInfo()` is unaffected. Falls
+  back to the in-memory block cache when indexing is disabled. Previously the
+  count used only the ~32-block in-memory cache, so `signalingPercent` was
+  understated and threshold-based `LOCKED_IN` was effectively unreachable.
+- **Deployment — restart-safe lock-in:** new one-time `$scanForLockIn()` scans
+  completed retarget periods (gated to blocks at/after `starttime` via
+  `BlocksRepository.$getFirstBlockHeightAtOrAfterTimestamp()`) to recover a
+  threshold-based lock-in that occurred before the process started. `computeState()`
+  now derives the mandatory backstop in a local variable instead of mutating
+  `lockedInHeight`, so the scan remains the source of truth for the real (earlier)
+  lock-in height.
+
+### Fixed
+
+- **Rule 6 (OP_SUCCESS\*) — was non-functional.** The old `containsOpSuccess()`
+  regex `/\bOP_SUCCESS\d+\b/` could never match, because both `inner_witnessscript_asm`
+  and `convertScriptSigAsm()` render these code points under legacy names
+  (`OP_RESERVED`, `OP_VER`, `OP_CAT`, …) — never `OP_SUCCESSx`. Replaced with
+  `scanTapscriptForViolations()`, a byte-level, push-aware walker that checks raw
+  Tapscript bytes against the actual OP_SUCCESS opcode set (80, 98, 126-129,
+  131-134, 137-138, 141-142, 149-153, 187-254) and OP_IF/OP_NOTIF. Verified that a
+  `0x50`/`0x4d` data byte inside a push is not mistaken for an opcode/length prefix.
+- **Rule 3 — undefined Tapleaf versions now detected.** For Taproot script-path
+  spends, the control block's leaf version (`firstByte & 0xfe`) is checked; any
+  value other than `0xc0` (BIP342) is flagged as an undefined witness/Tapleaf
+  version.
+- **Rule 4 — annex now detected on inferred script-path spends.** The annex check
+  fires when `prevout` is `v1_p2tr` *or* a Taproot script path is inferred from the
+  witness, covering the Core RPC (`prevout`-less) path for script-path spends.
+
+### Known Gaps
+
+The three gaps listed under 2026-02-06 (Rule 6 dead code, Rule 3 Tapleaf version,
+Rule 4 inferred-annex) are **resolved** above. Remaining limitations:
+
+- **`prevout`-dependent rules in Core RPC mode:** Rule 3 (undefined *witness*
+  version, read from the spent output's scriptPubKey) and a key-path annex (Rule 4)
+  cannot be detected when `vin.prevout` is `null`. The main Esplora path is
+  unaffected. **Severity: Very Low** — these spend types are non-standard/unused.
+- **Rule 7 "executing" is over-approximated:** any OP_IF/OP_NOTIF in a Tapscript is
+  flagged, since static analysis cannot determine which branch executes. This is
+  the conservative direction and matches the spam-detection intent.
+- **Activation-height exemption not applied:** the spec exempts inputs spending
+  UTXOs created before activation. The tool intentionally flags all would-be
+  violations regardless (the fork is not yet active, and the goal is to surface
+  data-storage transactions). **By design.**
+
+## 2026-02-06
 
 ### Added
 
@@ -92,7 +178,7 @@ See `bip-0110.mediawiki` in the project root for the full BIP specification.
 
 ### Known Gaps
 
-These are low/very-low severity issues identified during code audit. They are documented in detail in `LIVING_MEMORY.md` under "Open Issues".
+These are low/very-low severity issues identified during code audit.
 
 - **Rule 6 (OP_SUCCESS\*) — Detection is non-functional:** `containsOpSuccess()` regex `/\bOP_SUCCESS\d+\b/` never matches because `convertScriptSigAsm()` uses bitcoinjs-lib v6.1.3, which renders these opcodes under pre-tapscript names (`OP_RESERVED`, `OP_VER`, `OP_CAT`, etc.) or `"undefined"` (opcodes 187-254). **Severity: Low** — OP_SUCCESS transactions are "anyone-can-spend" and never appear in practice.
 - **Rule 3 — Missing Tapleaf version check:** BIP-0110 says "undefined witness **(or Tapleaf)** versions". The code checks the witness program version but not the Tapleaf version byte in the Taproot control block. Spends using undefined Tapleaf versions (anything other than 0xc0/BIP342) would not be flagged. **Severity: Very Low** — undefined Tapleaf versions are non-standard.

@@ -47,7 +47,7 @@ export interface RbfTree extends RbfInfo {
   replacedBy?: RbfTransaction;
 }
 
-export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active';
+export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active' | 'expired';
 
 export interface Bip110DeploymentInfo {
   state: Bip110State;

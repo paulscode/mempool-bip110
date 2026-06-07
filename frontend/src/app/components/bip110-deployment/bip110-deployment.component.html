@@ -12,10 +12,8 @@
                 <ng-container *ngSwitchCase="'defined'">DEFINED</ng-container>
                 <ng-container *ngSwitchCase="'started'">BIT 4 SIGNALS</ng-container>
                 <ng-container *ngSwitchCase="'locked_in'">LOCKED IN</ng-container>
-                <ng-container *ngSwitchCase="'active'">
-                  <ng-container *ngIf="!d.rulesExpired">ACTIVE</ng-container>
-                  <ng-container *ngIf="d.rulesExpired">EXPIRED</ng-container>
-                </ng-container>
+                <ng-container *ngSwitchCase="'active'">ACTIVE</ng-container>
+                <ng-container *ngSwitchCase="'expired'">EXPIRED</ng-container>
               </ng-container>
             </span>
             <span class="state-description">
@@ -27,10 +25,8 @@
                   </ng-container>
                 </ng-container>
                 <ng-container *ngSwitchCase="'locked_in'">Activation confirmed</ng-container>
-                <ng-container *ngSwitchCase="'active'">
-                  <ng-container *ngIf="!d.rulesExpired">Rules enforced</ng-container>
-                  <ng-container *ngIf="d.rulesExpired">Enforcement ended</ng-container>
-                </ng-container>
+                <ng-container *ngSwitchCase="'active'">Rules enforced</ng-container>
+                <ng-container *ngSwitchCase="'expired'">Enforcement ended</ng-container>
               </ng-container>
             </span>
           </div>
@@ -81,7 +77,7 @@
               </div>
             </ng-container>
 
-            <ng-container *ngIf="d.state === 'active' && !d.rulesExpired">
+            <ng-container *ngIf="d.state === 'active'">
               <div class="stat">
                 <span class="stat-value">{{ d.blocksUntilExpiry | number }}</span>
                 <span class="stat-label">Blocks remaining</span>
@@ -89,6 +85,13 @@
               <div class="stat" *ngIf="d.expiryHeight">
                 <span class="stat-value">{{ d.expiryHeight | number }}</span>
                 <span class="stat-label">Expiry height</span>
+              </div>
+            </ng-container>
+
+            <ng-container *ngIf="d.state === 'expired' && d.expiryHeight">
+              <div class="stat">
+                <span class="stat-value">{{ d.expiryHeight | number }}</span>
+                <span class="stat-label">Expired at height</span>
               </div>
             </ng-container>
 

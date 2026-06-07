@@ -409,6 +409,43 @@ class BlocksRepository {
   }
 
   /**
+   * Count blocks within a height range (inclusive) whose version signals a given bit.
+   * Used by the BIP-110 deployment tracker to count bit-4 signaling across a full
+   * retarget period (the in-memory block cache only holds the most recent blocks).
+   */
+  public async $countSignalingBlocks(startHeight: number, endHeight: number, bit: number): Promise<number> {
+    const mask = 1 << bit;
+    const query = `SELECT count(height) as signalCount
+      FROM blocks
+      WHERE height >= ? AND height <= ? AND (version & ?) != 0`;
+
+    try {
+      const [rows]: any[] = await DB.query(query, [startHeight, endHeight, mask]);
+      return <number>rows[0].signalCount;
+    } catch (e) {
+      logger.err(`Cannot count signaling blocks between heights. Reason: ` + (e instanceof Error ? e.message : e));
+      throw e;
+    }
+  }
+
+  /**
+   * Lowest block height whose timestamp is at or after the given unix time.
+   * Returns null if no such block exists yet. Used by the BIP-110 deployment
+   * tracker to bound signaling scans to blocks at/after the deployment starttime.
+   */
+  public async $getFirstBlockHeightAtOrAfterTimestamp(timestamp: number): Promise<number | null> {
+    const query = `SELECT MIN(height) as height FROM blocks WHERE blockTimestamp >= FROM_UNIXTIME(?)`;
+
+    try {
+      const [rows]: any[] = await DB.query(query, [timestamp]);
+      return rows[0]?.height ?? null;
+    } catch (e) {
+      logger.err(`Cannot get first block height at/after timestamp. Reason: ` + (e instanceof Error ? e.message : e));
+      throw e;
+    }
+  }
+
+  /**
    * Get average block health for all blocks for a single pool
    */
   public async $getAvgBlockHealthPerPoolId(poolId: number): Promise<number | null> {

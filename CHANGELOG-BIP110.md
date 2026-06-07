@@ -90,6 +90,16 @@ violation-detection and deployment-tracking gaps found in a full spec audit.
   `max(header map, in-memory recent blocks, indexed DB)`, so it is never a stale 0
   and converges to the exact full-period value quickly.
 
+- **Frontend duplicated the old detection logic.** The transaction details page
+  (and tracker / raw views) compute flags client-side via a copy of `getBIP110Flags`
+  in `frontend/src/app/shared/transaction.utils.ts`, which still had the *original*
+  rules — so a tx could show a BIP110 violation on its details page that the
+  (fixed) block-level count did not (e.g. a P2WSH multisig with a 626-byte witness
+  script flagged as "large push data"). The frontend copy was brought in line with
+  the backend: Rule 2 script-argument exemptions + internal-push scanning (with the
+  declared-length guard), Rule 3 Tapleaf versions, Rule 4 inferred annex, Rule 6
+  byte-level OP_SUCCESS scan, and the BIP16 redeemScript exemption.
+
 ### Known Gaps
 
 The three gaps listed under 2026-02-06 (Rule 6 dead code, Rule 3 Tapleaf version,

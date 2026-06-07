@@ -20,6 +20,17 @@ violation-detection and deployment-tracking gaps found in a full spec audit.
   - Added a GetBlockTemplate section (GBT name `reduced_data`, `vbrequired` during
     mandatory signaling) and a more precise LOCKED_IN definition.
 
+### Added
+
+- **Recent signaling blocks modal.** The signaling progress label on the
+  deployment card (e.g. "6/1194 (0.5%) · need 1109/2016") is now a clickable link
+  that opens a styled modal listing the most recent BIP-110 signaling blocks
+  (up to 25) in the current retarget period — each row shows a green block badge,
+  the height, and relative time, and navigates to that block's page on click. The
+  backend surfaces these via `recentSignalingBlocks` on the deployment info,
+  derived from the block headers already fetched for the signaling count
+  (heights + timestamps), so it adds no extra fetching.
+
 ### Changed
 
 - **Rule 2 — Script argument witness items (correctness):** the 256-byte witness

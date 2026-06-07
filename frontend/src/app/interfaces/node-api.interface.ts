@@ -64,6 +64,7 @@ export interface Bip110DeploymentInfo {
   expiryHeight: number | null;
   blocksUntilExpiry: number;
   rulesExpired: boolean;
+  recentSignalingBlocks: { height: number; time: number }[];
 }
 
 export interface DifficultyAdjustment {

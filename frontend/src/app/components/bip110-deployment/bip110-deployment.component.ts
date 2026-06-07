@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, OnInit } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, OnInit } from '@angular/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { StateService } from '@app/services/state.service';
@@ -15,6 +15,8 @@ export class Bip110DeploymentComponent implements OnInit {
   isLoading$: Observable<boolean>;
   bip110ScanProgress$: Observable<number>;
 
+  signalingModalOpen = false;
+
   constructor(
     private stateService: StateService,
   ) {}
@@ -25,5 +27,24 @@ export class Bip110DeploymentComponent implements OnInit {
     this.bip110ScanProgress$ = this.stateService.loadingIndicators$.pipe(
       map(indicators => indicators['bip110-scan'] !== undefined ? indicators['bip110-scan'] : -1)
     );
+  }
+
+  openSignalingModal(): void {
+    this.signalingModalOpen = true;
+  }
+
+  closeSignalingModal(): void {
+    this.signalingModalOpen = false;
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    if (this.signalingModalOpen) {
+      this.closeSignalingModal();
+    }
+  }
+
+  trackByHeight(index: number, block: { height: number; time: number }): number {
+    return block.height;
   }
 }

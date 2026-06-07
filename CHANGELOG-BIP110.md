@@ -80,13 +80,15 @@ violation-detection and deployment-tracking gaps found in a full spec audit.
   (e.g. block 952707 went from 0 true violations to 124). The walker now requires a
   push's declared data to fit within the script before counting it — matching the
   old ASM-based behavior. Real `>256` pushes (data present) are still flagged.
-- **Deployment signaling count stuck at 0 while the block DB back-fills.** The
-  count is read from the indexed `blocks` table over the current retarget period;
-  right after a fresh install the indexer hasn't populated that period yet, so it
-  returned 0 and overrode the in-memory fallback (which holds the most recent
-  blocks). `$getSignaling()` now returns `max(dbCount, inMemoryCount)`, so recent
-  signaling blocks show immediately and the exact full-period count takes over once
-  indexing catches up.
+- **Deployment signaling count stuck at 0 / not updating during indexing.** The
+  count was read only from the indexed `blocks` table (slow full-block indexer)
+  and only refreshed on a new block, so right after a fresh install it sat at 0
+  for a long time. The current period's signaling is now filled directly from
+  block **headers** (just the 4-byte version — fetched newest-first with bounded
+  concurrency), so it populates in seconds independent of full-block indexing, and
+  a 30s background timer re-polls so it climbs live. The count is published as
+  `max(header map, in-memory recent blocks, indexed DB)`, so it is never a stale 0
+  and converges to the exact full-period value quickly.
 
 ### Known Gaps
 

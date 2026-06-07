@@ -3,6 +3,7 @@ import blocks from './blocks';
 import { Common } from './common';
 import config from '../config';
 import BlocksRepository from '../repositories/BlocksRepository';
+import { bitcoinCoreApi } from './bitcoin/bitcoin-api-factory';
 
 /**
  * BIP-110 'reduced_data' deployment state tracker.
@@ -33,6 +34,7 @@ const MANDATORY_LOCK_IN_HEIGHT = 963648;          // forced LOCKED_IN if thresho
 const MAX_ACTIVATION_HEIGHT = 965664;             // ACTIVE starts here if locked in at mandatory
 const ACTIVE_DURATION = 52416;                    // rules enforced for this many blocks after activation
 const SIGNALING_BIT = 4;                          // deployment 'reduced_data' version bit
+const SIGNALING_REFRESH_INTERVAL_MS = 30000;      // re-poll the signaling count while block indexing back-fills
 
 export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active' | 'expired';
 
@@ -76,14 +78,40 @@ class Bip110DeploymentApi {
   private lastHeight: number = -1;
   /** Height at which LOCKED_IN was entered (if we know it) */
   private lockedInHeight: number | null = null;
-  /** DB-backed signaling count for the current retarget period */
+  /** Published signaling count for the current retarget period */
   private periodSignalingCache: { periodStart: number; count: number } | null = null;
-  /** Guard against overlapping async signaling refreshes */
-  private refreshing: boolean = false;
+  /** height -> signaling, fetched cheaply from block headers for the current period */
+  private periodSignals: Map<number, boolean> = new Map();
+  private periodSignalsStart: number = -1;
+  /** Guard against overlapping header fills */
+  private fillingSignals: boolean = false;
   /** Whether the one-time historical lock-in scan has completed */
   private lockInScanned: boolean = false;
   /** Guard against overlapping lock-in scans */
   private scanning: boolean = false;
+
+  constructor() {
+    // The signaling count is read from the indexed `blocks` table, which the
+    // block indexer back-fills over time (tip-downward). Re-poll periodically so
+    // the count climbs as indexing progresses, rather than only updating when a
+    // new block arrives. The timer is unref'd so it never holds the process open.
+    const timer = setInterval(() => { void this.$periodicRefresh(); }, SIGNALING_REFRESH_INTERVAL_MS);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  }
+
+  /**
+   * Periodic background refresh of the current period's signaling count.
+   */
+  private async $periodicRefresh(): Promise<void> {
+    const currentHeight = blocks.getCurrentBlockHeight();
+    if (currentHeight < 0) {
+      return;
+    }
+    const periodStart = currentHeight - (currentHeight % RETARGET_PERIOD);
+    await this.$fillPeriodSignals(periodStart, currentHeight);
+  }
 
   /**
    * Get the current deployment info. Recomputes only when chain tip changes.
@@ -123,7 +151,7 @@ class Bip110DeploymentApi {
       periodSignaling = this.periodSignalingCache.count;
     } else {
       periodSignaling = this.countSignalingInCurrentPeriod(periodStartHeight, currentHeight);
-      void this.$refreshSignaling(periodStartHeight, currentHeight);
+      void this.$fillPeriodSignals(periodStartHeight, currentHeight);
     }
     const signalingPercent = periodBlocks > 0 ? (periodSignaling / periodBlocks) * 100 : 0;
     const thresholdReached = periodSignaling >= THRESHOLD;
@@ -237,9 +265,11 @@ class Bip110DeploymentApi {
   private async $handleNewBlock(height: number): Promise<void> {
     const periodStart = height - (height % RETARGET_PERIOD);
 
-    // Get an accurate full-period count for this block height.
-    const signaling = await this.$getSignaling(periodStart, height);
-    this.periodSignalingCache = { periodStart, count: signaling };
+    // Fetch/refresh signaling for the period (cheap: block headers only).
+    await this.$fillPeriodSignals(periodStart, height);
+    const signaling = this.periodSignalingCache?.periodStart === periodStart
+      ? this.periodSignalingCache.count
+      : this.countSignalingInCurrentPeriod(periodStart, height);
 
     // Lock in at the end of a retarget period if the threshold was reached.
     if (this.lockedInHeight == null
@@ -304,46 +334,94 @@ class Bip110DeploymentApi {
   }
 
   /**
-   * Refresh the cached DB-backed signaling count for a retarget period.
-   * Guarded so overlapping reads don't issue a query storm.
+   * Fill the current period's signaling map directly from block headers.
+   *
+   * The signaling count only needs each block's version (the first 4 bytes of
+   * the 80-byte header), which is far cheaper to fetch than the full blocks the
+   * normal indexer processes. We fetch only the heights we don't already have,
+   * newest-first, with bounded concurrency, publishing the running count after
+   * each batch so the UI climbs within seconds instead of waiting for full-block
+   * indexing. Failed fetches are simply retried on the next refresh.
    */
-  private async $refreshSignaling(periodStart: number, currentHeight: number): Promise<void> {
-    if (this.refreshing) {
+  private async $fillPeriodSignals(periodStart: number, currentHeight: number): Promise<void> {
+    if (this.fillingSignals) {
       return;
     }
-    this.refreshing = true;
+    this.fillingSignals = true;
     try {
-      const count = await this.$getSignaling(periodStart, currentHeight);
-      this.periodSignalingCache = { periodStart, count };
-      // Invalidate so the next read reflects the accurate count.
-      this.cachedInfo = null;
-      this.lastHeight = -1;
+      if (this.periodSignalsStart !== periodStart) {
+        this.periodSignals.clear();
+        this.periodSignalsStart = periodStart;
+      }
+
+      const missing: number[] = [];
+      for (let h = currentHeight; h >= periodStart; h--) {
+        if (!this.periodSignals.has(h)) {
+          missing.push(h);
+        }
+      }
+
+      if (missing.length === 0) {
+        await this.$publishSignaling(periodStart, currentHeight);
+        return;
+      }
+
+      const CONCURRENCY = 8;
+      for (let i = 0; i < missing.length; i += CONCURRENCY) {
+        const batch = missing.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (h) => {
+          try {
+            const hash = await bitcoinCoreApi.$getBlockHash(h);
+            const headerHex = await bitcoinCoreApi.$getBlockHeader(hash);
+            const version = Buffer.from(headerHex.slice(0, 8), 'hex').readUInt32LE(0);
+            this.periodSignals.set(h, (version & (1 << SIGNALING_BIT)) !== 0);
+          } catch (e) {
+            // leave this height unset; it will be retried on the next refresh
+          }
+        }));
+        await this.$publishSignaling(periodStart, currentHeight);
+      }
     } finally {
-      this.refreshing = false;
+      this.fillingSignals = false;
     }
   }
 
   /**
-   * Count bit-4 signaling blocks in [periodStart, currentHeight].
-   *
-   * Uses the database (which covers the full retarget period) when indexing is
-   * enabled, combined with the in-memory cache via Math.max(): the DB may still
-   * be back-filling the current period (e.g. right after a fresh install), in
-   * which case already-mined blocks aren't counted yet — but the in-memory cache
-   * always holds the most recent blocks. Taking the larger avoids showing a
-   * stale 0, and the exact DB count wins once the period is fully indexed.
+   * Recompute and publish the period's signaling count from all known sources
+   * (header map, in-memory recent blocks, and the indexed DB as a fallback),
+   * then invalidate the cached info so the next read reflects it.
    */
-  private async $getSignaling(periodStart: number, currentHeight: number): Promise<number> {
-    const inMemory = this.countSignalingInCurrentPeriod(periodStart, currentHeight);
+  private async $publishSignaling(periodStart: number, currentHeight: number): Promise<void> {
+    let count = Math.max(
+      this.countSignalsInMap(periodStart, currentHeight),
+      this.countSignalingInCurrentPeriod(periodStart, currentHeight),
+    );
     if (config.DATABASE.ENABLED === true) {
       try {
-        const dbCount = await BlocksRepository.$countSignalingBlocks(periodStart, currentHeight, SIGNALING_BIT);
-        return Math.max(dbCount, inMemory);
+        count = Math.max(count, await BlocksRepository.$countSignalingBlocks(periodStart, currentHeight, SIGNALING_BIT));
       } catch (e) {
-        // Fall through to the in-memory count; the repository already logged it.
+        // DB is a fallback only; ignore failures (logged in the repository)
       }
     }
-    return inMemory;
+    this.periodSignalingCache = { periodStart, count };
+    this.cachedInfo = null;
+    this.lastHeight = -1;
+  }
+
+  /**
+   * Count signaling blocks in [periodStart, currentHeight] from the header map.
+   */
+  private countSignalsInMap(periodStart: number, currentHeight: number): number {
+    if (this.periodSignalsStart !== periodStart) {
+      return 0;
+    }
+    let count = 0;
+    for (const [height, signaling] of this.periodSignals) {
+      if (signaling && height >= periodStart && height <= currentHeight) {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**

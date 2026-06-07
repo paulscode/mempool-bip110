@@ -324,19 +324,26 @@ class Bip110DeploymentApi {
   }
 
   /**
-   * Count bit-4 signaling blocks in [periodStart, currentHeight]. Uses the
-   * database (full retarget period) when indexing is enabled, otherwise falls
-   * back to the limited in-memory block cache.
+   * Count bit-4 signaling blocks in [periodStart, currentHeight].
+   *
+   * Uses the database (which covers the full retarget period) when indexing is
+   * enabled, combined with the in-memory cache via Math.max(): the DB may still
+   * be back-filling the current period (e.g. right after a fresh install), in
+   * which case already-mined blocks aren't counted yet — but the in-memory cache
+   * always holds the most recent blocks. Taking the larger avoids showing a
+   * stale 0, and the exact DB count wins once the period is fully indexed.
    */
   private async $getSignaling(periodStart: number, currentHeight: number): Promise<number> {
+    const inMemory = this.countSignalingInCurrentPeriod(periodStart, currentHeight);
     if (config.DATABASE.ENABLED === true) {
       try {
-        return await BlocksRepository.$countSignalingBlocks(periodStart, currentHeight, SIGNALING_BIT);
+        const dbCount = await BlocksRepository.$countSignalingBlocks(periodStart, currentHeight, SIGNALING_BIT);
+        return Math.max(dbCount, inMemory);
       } catch (e) {
         // Fall through to the in-memory count; the repository already logged it.
       }
     }
-    return this.countSignalingInCurrentPeriod(periodStart, currentHeight);
+    return inMemory;
   }
 
   /**

@@ -27,8 +27,8 @@ import { StorageService } from '@app/services/storage.service';
 import { seoDescriptionNetwork } from '@app/shared/common.utils';
 import { getTransactionFlags, getUnacceleratedFeeRate } from '@app/shared/transaction.utils';
 import { Filter, TransactionFlags, toFilters } from '@app/shared/filters.utils';
-import { Bip110Service } from '@app/services/bip110.service';
-import { BlockExtended, CpfpInfo, RbfTree, MempoolPosition, DifficultyAdjustment, Acceleration, AccelerationPosition } from '@interfaces/node-api.interface';
+import { Bip110Service, BlockVerdict } from '@app/services/bip110.service';
+import { BlockExtended, CpfpInfo, RbfTree, MempoolPosition, DifficultyAdjustment, Acceleration, AccelerationPosition, Bip110EnforcementContext } from '@interfaces/node-api.interface';
 import { LiquidUnblinding } from '@components/transaction/liquid-ublinding';
 import { RelativeUrlPipe } from '@app/shared/pipes/relative-url/relative-url.pipe';
 import { PriceService } from '@app/services/price.service';
@@ -145,6 +145,9 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
 
   featuresEnabled: boolean;
   hasBip110Violation: boolean = false;
+  bip110Context: Bip110EnforcementContext | null = null;
+  bip110Verdict: BlockVerdict | null = null;
+  bip110Subscription: Subscription;
   segwitEnabled: boolean;
   rbfEnabled: boolean;
   taprootEnabled: boolean;
@@ -187,6 +190,12 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnInit() {
     this.enterpriseService.page();
+
+    this.bip110Subscription = this.stateService.bip110Deployment$.subscribe((deployment) => {
+      this.bip110Context = deployment?.enforcement ?? null;
+      this.updateBip110Verdict();
+      this.cd.markForCheck();
+    });
 
     const urlParams = new URLSearchParams(window.location.search);
     this.forceAccelerationSummary = !!urlParams.get('cash_request_id');
@@ -929,6 +938,64 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
     this.isAccelerated$.next(this.isAcceleration);
   }
 
+  /**
+   * Classify this transaction's BIP-110 status.
+   *
+   * The flags here come from the frontend's own copy of the rule checks
+   * (getTransactionFlags), which has no access to prevout confirmation heights and so
+   * cannot evaluate the spec's exemption for inputs spending pre-activation UTXOs. Once
+   * the rules are actually enforced that makes any local hit unverifiable, so it is
+   * marked degraded and surfaces as "unverified" amber rather than red. Escalating here
+   * would bypass every backend safeguard and is the most likely source of a false
+   * accusation in the whole feature.
+   */
+  private updateBip110Verdict(): void {
+    if (!this.tx || !this.hasBip110Violation) {
+      this.bip110Verdict = null;
+      return;
+    }
+    const height = this.tx.status?.confirmed
+      ? (this.tx.status.block_height ?? this.stateService.latestBlockHeight)
+      : this.stateService.latestBlockHeight;
+    this.bip110Verdict = Bip110Service.blockVerdict({
+      height,
+      violationCount: 1,
+      statsConfidence: 'degraded',
+    }, this.bip110Context);
+  }
+
+  /** Verdict-driven banner text, in the correct tense for this transaction's height. */
+  get bip110WarningText(): string {
+    const ctx = this.bip110Context;
+    const severity = this.bip110Verdict?.severity;
+    if (severity === 'invalid') {
+      return 'BIP-110 VIOLATION: This transaction is invalid under BIP-110 consensus rules.';
+    }
+    if (severity === 'uncertain') {
+      return 'BIP-110: This transaction matches the BIP-110 rules. If its inputs spend UTXOs created '
+        + 'before the activation height they are exempt and it remains valid.';
+    }
+    if (severity === 'pending' && ctx?.activationHeight != null) {
+      return `BIP-110: This transaction would be invalid once the rules activate at block ${ctx.activationHeight}.`;
+    }
+    if (ctx?.state === 'expired') {
+      return 'BIP-110: This transaction would have been invalid while the BIP-110 rules were enforced.';
+    }
+    return 'BIP-110 VIOLATION: This transaction would be invalid under the proposed soft fork consensus rules.';
+  }
+
+  get bip110IsInvalid(): boolean {
+    return this.bip110Verdict?.severity === 'invalid';
+  }
+
+  /**
+   * Shown when the rules are live but the exemption could not be evaluated client-side.
+   * Without it, "matches the rules but no verdict" reads as an unexplained hedge.
+   */
+  get bip110ExemptNote(): string | null {
+    return this.bip110Verdict?.severity === 'uncertain' ? Bip110Service.EXEMPT_NOTE : null;
+  }
+
   setFeatures(): void {
     if (this.tx) {
       this.segwitEnabled = !this.tx.status.confirmed || isFeatureActive(this.stateService.network, this.tx.status.block_height, 'segwit');
@@ -937,6 +1004,7 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
       this.tx.flags = getTransactionFlags(this.tx, null, null, this.tx.status?.block_time, this.stateService.network);
       this.filters = this.tx.flags ? toFilters(this.tx.flags).filter(f => f.txPage) : [];
       this.hasBip110Violation = this.tx.flags ? Bip110Service.hasAnyViolation(this.tx.flags) : false;
+      this.updateBip110Verdict();
       this.checkAccelerationEligibility();
     } else {
       this.segwitEnabled = false;
@@ -1151,6 +1219,7 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    this.bip110Subscription?.unsubscribe();
     this.subscription.unsubscribe();
     this.fetchCpfpSubscription.unsubscribe();
     this.transactionTimesSubscription.unsubscribe();

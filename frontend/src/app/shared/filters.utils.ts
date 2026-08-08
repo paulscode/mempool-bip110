@@ -138,5 +138,8 @@ export const FilterGroups: { label: string, filters: Filter[]}[] = [
   { label: $localize`Data`, filters: ['op_return', 'fake_pubkey', 'fake_scripthash', 'inscription'] },
   { label: $localize`Heuristics`, filters: ['coinjoin', 'consolidation', 'batch_payout'] },
   { label: $localize`Sighash Flags`, filters: ['sighash_all', 'sighash_none', 'sighash_single', 'sighash_default', 'sighash_acp'] },
-  { label: $localize`BIP110 Violations`, filters: ['bip110_large_scriptpubkey', 'bip110_large_pushdata', 'bip110_undefined_witness', 'bip110_taproot_annex', 'bip110_large_control_block', 'bip110_op_success', 'bip110_op_if_notif'] },
+  // Heading stays neutral: these filters match transactions against the BIP-110 rules,
+  // which is a different claim from those transactions being invalid — that depends on
+  // the block's height and is decided by Bip110Service.blockVerdict, not here.
+  { label: $localize`BIP110 Rule Matches`, filters: ['bip110_large_scriptpubkey', 'bip110_large_pushdata', 'bip110_undefined_witness', 'bip110_taproot_annex', 'bip110_large_control_block', 'bip110_op_success', 'bip110_op_if_notif'] },
 ].map(group => ({ label: group.label, filters: group.filters.map(filter => TransactionFilters[filter] || null).filter(f => f != null) }));

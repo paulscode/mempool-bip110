@@ -343,6 +343,138 @@
   }
 }
 
+// ── Invalid blocks (red) ─────────────────────────────────────────────────────
+// Only reachable on a node that does NOT enforce BIP-110: an enforcing node cannot
+// have accepted these blocks. Deliberately mirrors the green signaling rule's glow
+// envelope and 2s pulse so the two read as the same visual language at opposite poles.
+.bitcoin-block.bip110-invalid {
+  box-shadow:
+    0 0 8px 2px rgba(255, 59, 48, 0.6),
+    inset 0 0 8px rgba(255, 59, 48, 0.2);
+  border: 2px solid #ff3b30;
+  animation: bip110-invalid-pulse 2s ease-in-out infinite;
+  animation-delay: -1s; // out of phase with the signaling pulse
+
+  &::before {
+    background-color: rgba(255, 59, 48, 0.25) !important;
+    box-shadow: inset 0 0 8px rgba(255, 59, 48, 0.2);
+  }
+
+  &::after {
+    background-color: rgba(255, 59, 48, 0.18) !important;
+    box-shadow: inset 0 0 8px rgba(255, 59, 48, 0.15);
+  }
+}
+
+@keyframes bip110-invalid-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 8px 2px rgba(255, 59, 48, 0.6),
+      inset 0 0 8px rgba(255, 59, 48, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 15px 4px rgba(255, 59, 48, 0.85),
+      inset 0 0 12px rgba(255, 59, 48, 0.35);
+  }
+}
+
+// A signaling block that nonetheless carries invalid transactions: green frame shows
+// miner intent, red interior shows what the block actually contains.
+.bitcoin-block.bip110-invalid.bip110-signaling {
+  border: 2px solid #00ff88;
+  box-shadow:
+    0 0 10px 2px rgba(0, 255, 136, 0.55),
+    0 0 6px 2px rgba(255, 59, 48, 0.6),
+    inset 0 0 14px rgba(255, 59, 48, 0.35);
+  animation: bip110-invalid-signal-pulse 2.5s ease-in-out infinite;
+
+  &::before {
+    background-color: rgba(255, 59, 48, 0.2) !important;
+    box-shadow: inset 0 0 10px rgba(255, 59, 48, 0.25);
+  }
+
+  &::after {
+    background-color: rgba(255, 59, 48, 0.15) !important;
+    box-shadow: inset 0 0 8px rgba(255, 59, 48, 0.2);
+  }
+}
+
+@keyframes bip110-invalid-signal-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 10px 2px rgba(0, 255, 136, 0.55),
+      0 0 6px 2px rgba(255, 59, 48, 0.6),
+      inset 0 0 14px rgba(255, 59, 48, 0.35);
+    border-color: #00ff88;
+  }
+  50% {
+    box-shadow:
+      0 0 18px 4px rgba(0, 255, 136, 0.75),
+      0 0 10px 3px rgba(255, 59, 48, 0.85),
+      inset 0 0 20px rgba(255, 59, 48, 0.5);
+    border-color: #33ffaa;
+  }
+}
+
+// ── Milestone blocks (gold) ──────────────────────────────────────────────────
+// Composes with the compliance colour rather than replacing it. A gold glow that
+// replaced the green/red would make a non-signaling mandatory-start block look
+// celebratory, which is the worst possible outcome.
+.bitcoin-block.bip110-milestone {
+  outline: 2px solid #ffc107;
+  outline-offset: 3px;
+  animation: bip110-milestone-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes bip110-milestone-glow {
+  0%, 100% { outline-color: rgba(255, 193, 7, 0.75); }
+  50%      { outline-color: rgba(255, 215, 64, 1); }
+}
+
+.bip110-milestone-ribbon {
+  position: absolute;
+  bottom: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 150%;
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #ffd740 0%, #ffb300 100%);
+  color: #2b2000;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 12;
+}
+
+// ── Invalid indicator badges ─────────────────────────────────────────────────
+.bip110-invalid-indicator {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 11;
+  line-height: 1;
+}
+
+.bip110-invalid-icon {
+  font-size: 13px;
+  filter: drop-shadow(0 0 3px rgba(255, 59, 48, 0.9));
+}
+
+.badge-bip110-invalid-mini {
+  background-color: #ff3b30;
+  color: #fff;
+  font-size: 9px;
+  padding: 1px 4px;
+  font-weight: 700;
+}
+
 // BIP110 signaling indicator (green)
 .bip110-indicator {
   position: absolute;

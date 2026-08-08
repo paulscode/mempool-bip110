@@ -13,6 +13,8 @@
         [class.offscreen]="!static && count && i >= count"
         [class.bip110-signaling]="hasBIP110Signaling(block)"
         [class.bip110-violations]="hasBIP110Violations(block)"
+        [class.bip110-invalid]="isBIP110Invalid(block)"
+        [class.bip110-milestone]="getBIP110Milestone(block)"
         id="bitcoin-block-{{ block.height }}" [ngStyle]="blockStyles[i]"
         [style]="blockTransformation"
         [class.blink-bg]="isSpecial(block.height)">
@@ -76,13 +78,27 @@
           <span class="badge badge-bip110-signal-mini">BIP110</span>
         </div>
         <ng-container *ngIf="hasBIP110Violations(block)">
-          <div class="bip110-radioactive-indicator" [title]="'This block contains ' + getBIP110ViolationCount(block) + ' transaction(s) that would violate BIP110 rules'">
+          <div class="bip110-radioactive-indicator" [title]="getBIP110Tooltip(block)">
             <img src="/resources/radioactive.svg" alt="BIP110 Violation" class="radioactive-icon">
           </div>
-          <div class="bip110-violation-count" [title]="'This block contains ' + getBIP110ViolationCount(block) + ' transaction(s) that would violate BIP110 rules'">
+          <div class="bip110-violation-count" [title]="getBIP110Tooltip(block)">
             <span class="badge badge-bip110-violation-mini">{{ getBIP110ViolationCount(block) }}</span>
           </div>
         </ng-container>
+        <ng-container *ngIf="isBIP110Invalid(block)">
+          <div class="bip110-invalid-indicator" [title]="getBIP110Tooltip(block)">
+            <span class="bip110-invalid-icon">&#9940;</span>
+          </div>
+          <div class="bip110-violation-count" *ngIf="getBIP110ViolationCount(block) > 0" [title]="getBIP110Tooltip(block)">
+            <span class="badge badge-bip110-invalid-mini">{{ getBIP110ViolationCount(block) }}</span>
+          </div>
+        </ng-container>
+        <!-- Gold ribbon composes on top of the compliance colour: it marks WHAT the
+             block is, while the glow still shows WHETHER it complies. -->
+        <div class="bip110-milestone-ribbon" *ngIf="!minimal && getBIP110Milestone(block) as milestone"
+             [title]="milestone">
+          <span class="bip110-milestone-text">{{ milestone }}</span>
+        </div>
       </div>
     </ng-container>
     <ng-template #placeholderBlock>

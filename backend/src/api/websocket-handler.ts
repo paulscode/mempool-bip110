@@ -16,6 +16,7 @@ import transactionUtils from './transaction-utils';
 import rbfCache, { ReplacementInfo } from './rbf-cache';
 import difficultyAdjustment from './difficulty-adjustment';
 import bip110Deployment from './bip110-deployment';
+import bip110NodeSupport from './bip110-node-support';
 import feeApi from './fee-api';
 import BlocksRepository from '../repositories/BlocksRepository';
 import BlocksAuditsRepository from '../repositories/BlocksAuditsRepository';
@@ -443,6 +444,35 @@ class WebsocketHandler {
         client.send(JSON.stringify({ donationConfirmed: true }));
       }
     });
+    }
+  }
+
+  /**
+   * Broadcast the BIP-110 deployment payload outside the new-block path.
+   *
+   * Node-support detection resolves asynchronously after startup, so the payload sent
+   * at websocket init usually carries `nodeSupport: 'unknown'`. Without this, a client
+   * that connects during startup would sit on "Enforcement status unknown" — and on
+   * conditional wording for every validity label — until the next block arrives.
+   */
+  handleBip110DeploymentChanged(): void {
+    if (!this.webSocketServers.length) {
+      return;
+    }
+    const deployment = bip110Deployment.getDeploymentInfo();
+    if (!deployment) {
+      return;
+    }
+    this.updateSocketDataFields({ 'bip110deployment': deployment });
+
+    const response = JSON.stringify({ bip110deployment: deployment });
+    for (const server of this.webSocketServers) {
+      server.clients.forEach((client) => {
+        if (client.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        client.send(response);
+      });
     }
   }
 
@@ -1142,8 +1172,10 @@ class WebsocketHandler {
     const fees = feeApi.getRecommendedFee();
     const mempoolInfo = memPool.getMempoolInfo();
 
-    // Update BIP-110 deployment state
+    // Update BIP-110 deployment state, and re-probe node support (cheap, and it catches
+    // a node upgraded underneath a long-running app)
     bip110Deployment.onNewBlock(block.height);
+    void bip110NodeSupport.$refresh();
 
     // pre-compute address transactions
     const addressCache = this.makeAddressCache(transactions);

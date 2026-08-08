@@ -3,6 +3,70 @@
 All changes are relative to upstream mempool/mempool v3.2.1.
 See `bip-0110.mediawiki` in the project root for the full BIP specification.
 
+## 2026-08-07
+
+Prepared the app for every context it can find itself in once mandatory signaling
+(961632) and activation (<=965664) are reached. Until now the app had exactly one model
+of the world -- "BIP-110 is a proposal" -- and every colour and string was hard-coded to
+it. See `BIP110-OUTCOMES-PLAN.md` in the project root for the full design and the
+rationale behind each decision (D1-D8).
+
+### Added
+
+- **Node enforcement detection** (`bip110-node-support.ts`). Probes `getdeploymentinfo`
+  for the `reduced_data` deployment (falling back to any bip9 deployment on bit 4, then
+  to `getblockchaininfo.softforks` on pre-v25 nodes, with a `BIP110.ENFORCING` config
+  override). Verified against Knots 29.3.0: the deployment is reported under exactly
+  that name, with `max_activation_height` and a per-block `signalling` string.
+- **Pre-activation UTXO exemption.** The spec exempts inputs spending UTXOs created
+  before the activation height, and rules 2-7 are all input-side -- so without this the
+  app would paint valid post-activation blocks red. Confirmed blocks get prevout heights
+  from `getblock` verbosity 3 (which also replaces witness-structure inference with real
+  prevout script types); unconfirmed transactions resolve them lazily via `gettxout`
+  (`bip110-mempool-exemption.ts`).
+- **Chain verdict.** "Did BIP-110 succeed?" is not a question about the state machine --
+  lock-in is guaranteed by 963648. The observable question is whether the chain this node
+  follows obeys the rules, so the app now reports `compliant` / `divergent` / `unknown`
+  and names the first diverging block.
+- **Red block treatment** for blocks that are invalid *now*, distinct from the existing
+  amber for hypothetical or historical violations, plus **gold milestone ribbons** that
+  compose with the compliance colour rather than replacing it.
+- **`BIP110.HEIGHTS` config block**, so the whole activation timeline can be exercised on
+  regtest or against shifted mainnet heights before it happens for real.
+- **`BIP110.STRICT_VERDICTS` kill switch.** When false, nothing is escalated to "invalid"
+  and all wording stays conditional -- a rollback that needs no code deploy.
+
+### Changed
+
+- **Wording is now verdict-driven everywhere.** "would be invalid" becomes "is invalid"
+  only where the rules actually apply to that block's height, with distinct phrasing for
+  pending, historical, post-expiry and unverified cases.
+- **Mandatory signaling is no longer a bare height range.** Per spec it ends once
+  LOCKED_IN is reached, so an early threshold lock-in means it never applies -- treating
+  it as a range would have painted valid non-signaling blocks red.
+- **Deployment card is per-state**, including a mandatory-mode progress bar (the
+  requirement is 2016 of 2016, not the 55% threshold the old bar drew).
+- Per-period signaling now comes from the node's `signalling` string when available: one
+  RPC instead of ~4000 header fetches per period, and authoritative rather than derived.
+
+### Fixed
+
+- **Reorg staleness.** The violation cache was keyed by height alone, so after a reorg a
+  block inherited the previous occupant's violation count permanently. Cache format v3
+  adds a block-hash tag per entry, making the check self-healing regardless of whether
+  database indexing is enabled (the existing reorg handler is gated on it).
+- **Blocks falsely recorded as clean.** Disk-cache seeding used `|| 0`, recording an
+  unknown count as "scanned, zero violations" -- after activation, a block that should be
+  red painted green.
+- **Scanner hole at the chain tip.** The background scan started below the memory cache,
+  leaving the newest -- and post-activation the only consensus-relevant -- blocks to the
+  real-time path alone. It now starts at the tip and covers the enforced range before the
+  informational history.
+- **Unverifiable data could be escalated to red.** Counts computed without prevout heights
+  (verbosity-2 fallback, or before the deployment context is known) are now marked
+  degraded and surface as unverified amber. An enforcing node cannot have accepted an
+  invalid block, so a detector hit that contradicts one is treated as a detector fault.
+
 ## 2026-06-07
 
 Reconciled the implementation with an updated `bip-0110.mediawiki` and closed the

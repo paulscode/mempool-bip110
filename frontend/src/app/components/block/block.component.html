@@ -1,4 +1,16 @@
-<div class="container-xl" [class.bip110-violation-glow]="bip110ViolationCount > 0" [class.bip110-signaling-glow]="block && hasBIP110Signaling(block.version)" (window:resize)="onResize($event)">
+<div class="container-xl" [class.bip110-violation-glow]="bip110ViolationCount > 0 && !bip110IsInvalid" [class.bip110-invalid-glow]="bip110IsInvalid" [class.bip110-signaling-glow]="block && hasBIP110Signaling(block.version)" (window:resize)="onResize($event)">
+
+  <!-- Deployment milestone marker (gold), composed with the compliance colour above -->
+  <div class="bip110-milestone-banner" *ngIf="bip110MilestoneLabel">
+    <span class="bip110-milestone-star">&#9733;</span>
+    <span>{{ bip110MilestoneLabel }}</span>
+  </div>
+
+  <!-- Chain-level warning: only reachable on a node that does not enforce BIP-110 -->
+  <div class="alert alert-bip110-invalid" role="alert" *ngIf="bip110IsInvalid">
+    <span class="bip110-icon">&#9940;</span>
+    <span class="bip110-warning-text">{{ bip110Tooltip }}</span>
+  </div>
 
   <div class="title-block" [class.time-ltr]="timeLtr" id="block">
     <div *ngIf="block?.stale" class="alert alert-mempool" role="alert">
@@ -79,12 +91,15 @@
                 </td>
               </tr>
               <tr>
-                <td>BIP110 Violations<a class="info-link" ngbTooltip="Transactions that would be invalid under BIP110 (Reduced Data Temporary Softfork)"><fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true"></fa-icon></a></td>
+                <td>{{ bip110ViolationsLabel }}<a class="info-link" [ngbTooltip]="bip110Tooltip || 'Transactions that would be invalid under BIP110 (Reduced Data Temporary Softfork)'"><fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true"></fa-icon></a></td>
                 <td>
                   <ng-container *ngIf="!isLoadingOverview; else loadingBip110">
                     <span *ngIf="bip110ViolationCount === 0" class="badge" [ngClass]="block && hasBIP110Signaling(block.version) ? 'badge-bip110-clean' : 'badge-success'">None ✓</span>
-                    <span *ngIf="bip110ViolationCount > 0" class="badge badge-bip110-violation-block">
-                      ⚠️ {{ bip110ViolationCount }} {{ bip110ViolationCount === 1 ? 'transaction' : 'transactions' }}
+                    <span *ngIf="bip110ViolationCount > 0" class="badge"
+                          [ngClass]="bip110IsInvalid ? 'badge-bip110-invalid-block' : 'badge-bip110-violation-block'"
+                          [ngbTooltip]="bip110Tooltip">
+                      {{ bip110IsInvalid ? '⛔' : '⚠️' }} {{ bip110ViolationCount }} {{ bip110ViolationCount === 1 ? 'transaction' : 'transactions' }}
+                      <ng-container *ngIf="bip110IsUncertain"> (unverified)</ng-container>
                     </span>
                   </ng-container>
                   <ng-template #loadingBip110>
@@ -132,6 +147,7 @@
             [showFilters]="true"
             [excludeFilters]="['replacement']"
             [relativeTime]="block?.timestamp"
+            [bip110Invalid]="bip110IsInvalid"
             (txClickEvent)="onTxClick($event)"
           ></app-block-overview-graph>
           <ng-container *ngTemplateOutlet="emptyBlockInfo"></ng-container>
@@ -254,7 +270,7 @@
           <app-block-overview-graph #blockGraphProjected [isLoading]="!stateService.isBrowser || isLoadingOverview" [resolution]="86"
             [blockLimit]="stateService.blockVSize" [orientation]="'top'" [flip]="false" [mirrorTxid]="hoverTx" [auditHighlighting]="showAudit"
             (txClickEvent)="onTxClick($event)" (txHoverEvent)="onTxHover($event)" [unavailable]="!isMobile && !showAudit"
-            [showFilters]="true" [excludeFilters]="['replacement']" [relativeTime]="block?.timestamp"></app-block-overview-graph>
+            [showFilters]="true" [excludeFilters]="['replacement']" [relativeTime]="block?.timestamp" [bip110Invalid]="bip110IsInvalid"></app-block-overview-graph>
           <ng-container *ngIf="!isMobile || mode !== 'actual'; else emptyBlockInfo"></ng-container>
         </div>
         <ng-container *ngIf="network !== 'liquid'">
@@ -269,7 +285,7 @@
           <app-block-overview-graph #blockGraphActual [isLoading]="!stateService.isBrowser || isLoadingOverview" [resolution]="86"
             [blockLimit]="stateService.blockVSize" [orientation]="'top'" [flip]="false" [mirrorTxid]="hoverTx" mode="mined"  [auditHighlighting]="showAudit"
             (txClickEvent)="onTxClick($event)" (txHoverEvent)="onTxHover($event)" [unavailable]="isMobile && !showAudit"
-            [showFilters]="true" [excludeFilters]="['replacement']" [relativeTime]="block?.timestamp"></app-block-overview-graph>
+            [showFilters]="true" [excludeFilters]="['replacement']" [relativeTime]="block?.timestamp" [bip110Invalid]="bip110IsInvalid"></app-block-overview-graph>
           <ng-container *ngTemplateOutlet="emptyBlockInfo"></ng-container>
         </div>
         <ng-container *ngIf="network !== 'liquid'">

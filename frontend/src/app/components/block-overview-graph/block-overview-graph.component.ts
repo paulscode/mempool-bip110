@@ -9,7 +9,7 @@ import { Price } from '@app/services/price.service';
 import { StateService } from '@app/services/state.service';
 import { ThemeService } from '@app/services/theme.service';
 import { Subscription } from 'rxjs';
-import { defaultColorFunction, setOpacity, defaultAuditColors, defaultColors, ageColorFunction, contrastColorFunction, contrastAuditColors, contrastColors, hasBIP110Violation, setBIP110PulsePhase } from '@components/block-overview-graph/utils';
+import { defaultColorFunction, setOpacity, defaultAuditColors, defaultColors, ageColorFunction, contrastColorFunction, contrastAuditColors, contrastColors, hasBIP110Violation, setBIP110PulsePhase, setBIP110InvalidMode } from '@components/block-overview-graph/utils';
 import { ActiveFilter, FilterMode, toFlags } from '@app/shared/filters.utils';
 import { detectWebGL } from '@app/shared/graphs.utils';
 
@@ -54,6 +54,8 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
   @Input() filterFlags: bigint | null = null;
   @Input() filterMode: FilterMode = 'and';
   @Input() gradientMode: 'fee' | 'age' = 'fee';
+  /** Render BIP-110 hits in the red "actually invalid" palette rather than amber */
+  @Input() bip110Invalid: boolean = false;
   @Input() relativeTime: number | null;
   @Input() blockConversion: Price;
   @Input() overrideColors: ((tx: TxView) => Color) | null = null;
@@ -457,6 +459,7 @@ export class BlockOverviewGraphComponent implements AfterViewInit, OnDestroy, On
     
     // Update BIP110 pulse phase and trigger color update for pulsing effect
     setBIP110PulsePhase(now * 0.005); // Pulse at ~0.8Hz
+    setBIP110InvalidMode(this.bip110Invalid);
     if (this.scene && now - this.lastBip110PulseUpdate > 50) { // Update colors every 50ms for smooth pulse
       this.lastBip110PulseUpdate = now;
       this.scene.updateAllColors();

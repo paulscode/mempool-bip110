@@ -1,4 +1,4 @@
-<div class="container-xl" [class.bip110-violation-glow]="hasBip110Violation">
+<div class="container-xl" [class.bip110-violation-glow]="hasBip110Violation && !bip110IsInvalid" [class.bip110-invalid-glow]="bip110IsInvalid">
 
   <div class="title-block">
     <div *ngIf="rbfTransaction && !tx?.status?.confirmed" class="alert alert-mempool" role="alert">
@@ -6,10 +6,12 @@
       <app-truncate [text]="rbfTransaction.txid" [lastChars]="12" [link]="['/tx/' | relativeUrl, rbfTransaction.txid]"></app-truncate>
     </div>
 
-    <div *ngIf="hasBip110Violation" class="alert alert-bip110-violation" role="alert">
-      <span class="bip110-icon">☢️</span>
-      <span class="bip110-warning-text">BIP-110 VIOLATION: This transaction would be <strong>invalid</strong> under the proposed soft fork consensus rules.</span>
+    <div *ngIf="hasBip110Violation" class="alert" role="alert"
+         [ngClass]="bip110IsInvalid ? 'alert-bip110-invalid' : 'alert-bip110-violation'">
+      <span class="bip110-icon">{{ bip110IsInvalid ? '⛔' : '☢️' }}</span>
+      <span class="bip110-warning-text">{{ bip110WarningText }}</span>
     </div>
+    <div *ngIf="bip110ExemptNote" class="bip110-exempt-note-block">{{ bip110ExemptNote }}</div>
 
     <ng-container *ngIf="!rbfTransaction || rbfTransaction?.size || tx">
       <h1 i18n="shared.transaction">Transaction</h1>

@@ -132,6 +132,12 @@ export interface TransactionExtended extends IEsploraApi.Transaction {
   replacement?: boolean;
   uid?: number;
   flags?: number;
+  /**
+   * 'degraded' when BIP-110 flags were derived without prevout heights, so the
+   * pre-activation UTXO exemption could not be evaluated and the UI must not escalate
+   * to an "invalid" verdict on their strength.
+   */
+  bip110StatsConfidence?: 'exact' | 'degraded';
 }
 
 export interface MempoolTransactionExtended extends TransactionExtended {
@@ -340,6 +346,10 @@ export interface BlockExtension {
   bip110Signaling?: boolean;
   // BIP110 violation count: transactions that would be invalid under BIP110 consensus rules
   bip110ViolationCount?: number;
+  // BIP110 stats confidence: 'degraded' when the counts were derived without prevout
+  // heights, so the exemption could not be evaluated and the UI must not escalate to
+  // an "invalid" verdict on the strength of them.
+  bip110StatsConfidence?: 'exact' | 'degraded';
   // BIP110 violation weight: total weight of transactions that would violate BIP110 rules
   bip110ViolationWeight?: number;
 }

@@ -49,6 +49,40 @@ export interface RbfTree extends RbfInfo {
 
 export type Bip110State = 'defined' | 'started' | 'locked_in' | 'active' | 'expired';
 
+export type Bip110NodeSupport = 'enforcing' | 'not-enforcing' | 'unknown';
+
+export type Bip110ChainVerdict = 'compliant' | 'divergent' | 'unknown';
+
+export type Bip110DivergenceReason = 'non-signaling' | 'violating-transactions';
+
+/**
+ * Mirrors Bip110EnforcementContext in the backend (api/bip110-params.ts).
+ * Keep the two in sync — every validity label in the UI is conditional on this.
+ */
+export interface Bip110EnforcementContext {
+  nodeSupport: Bip110NodeSupport;
+  nodeSupportSource: 'getdeploymentinfo' | 'getblockchaininfo' | 'config' | 'unknown';
+  nodeSubversion: string | null;
+  /** Chain tip this context was computed for */
+  currentTipHeight: number;
+
+  state: Bip110State;
+  stateSource: 'node' | 'computed';
+  lockInHeight: number | null;
+  activationHeight: number | null;
+  expiryHeight: number | null;
+
+  /** null when lock-in happened before the window opened, i.e. it never applied */
+  mandatoryWindow: { start: number; end: number } | null;
+
+  chainVerdict: Bip110ChainVerdict;
+  firstDivergenceHeight: number | null;
+  divergenceReason: Bip110DivergenceReason | null;
+
+  /** When false, no block may be escalated to an "invalid" verdict */
+  strictVerdicts: boolean;
+}
+
 export interface Bip110DeploymentInfo {
   state: Bip110State;
   currentHeight: number;
@@ -65,6 +99,9 @@ export interface Bip110DeploymentInfo {
   blocksUntilExpiry: number;
   rulesExpired: boolean;
   recentSignalingBlocks: { height: number; time: number }[];
+  mandatoryNonSignalingCount: number;
+  lockInHeight: number | null;
+  enforcement: Bip110EnforcementContext;
 }
 
 export interface DifficultyAdjustment {
@@ -232,6 +269,8 @@ export interface BlockExtension {
   bip110Signaling?: boolean;
   bip110ViolationCount?: number;
   bip110ViolationWeight?: number;
+  /** 'degraded' when the counts were derived without prevout heights (no exemption check) */
+  bip110StatsConfidence?: 'exact' | 'degraded';
 }
 
 export interface BlockExtended extends Block {

@@ -3,6 +3,7 @@ import bitcoinApi from './bitcoin/bitcoin-api-factory';
 import { MempoolTransactionExtended, TransactionExtended, VbytesPerSecond, GbtCandidates } from '../mempool.interfaces';
 import logger from '../logger';
 import { Common } from './common';
+import bip110MempoolExemption from './bip110-mempool-exemption';
 import transactionUtils from './transaction-utils';
 import { IBitcoinApi } from './bitcoin/bitcoin-api.interface';
 import loadingIndicators from './loading-indicators';
@@ -367,6 +368,11 @@ class Mempool {
     this.recentlyDeleted.unshift(deletedTransactions);
     this.recentlyDeleted.length = Math.min(this.recentlyDeleted.length, 10); // truncate to the last 10 mempool updates
 
+    // Resolve the BIP-110 pre-activation UTXO exemption for newly-flagged transactions.
+    // Only runs while the rules are enforced, and only for the (rare) flagged ones —
+    // see bip110-mempool-exemption.ts for why this can't be done inline.
+    await this.$applyBip110Exemption(newTransactions);
+
     if (this.mempoolChangedCallback && (hasChange || newTransactions.length || deletedTransactions.length)) {
       this.mempoolChangedCallback(this.mempoolCache, newTransactions, this.recentlyDeleted, accelerationDelta);
     }
@@ -475,6 +481,67 @@ class Mempool {
 
   getAccelerationPositions(txid: string): { [pool: number]: { poolId: number, pool: string, block: number, vsize: number } } | undefined {
     return this.accelerationPositions[txid];
+  }
+
+  /**
+   * Re-evaluate BIP-110 flags for mempool transactions with the pre-activation UTXO
+   * exemption applied.
+   *
+   * Unconfirmed transactions have no prevout heights in their cached form, so the flags
+   * set inline by getTransactionFlags() cannot tell an input spending a pre-activation
+   * UTXO (exempt, still valid) from one that genuinely violates. Resolving that needs an
+   * RPC per input, which is why it happens here, out of band, and only for transactions
+   * that were already flagged.
+   */
+  private async $applyBip110Exemption(newTransactions: MempoolTransactionExtended[]): Promise<void> {
+    if (!newTransactions?.length) {
+      return;
+    }
+    // This runs inside the mempool update loop and costs an RPC per input, so cap the
+    // work per pass. Anything skipped keeps its unresolved flags, which the UI shows as
+    // unverified rather than invalid — the safe direction — and gets another chance on
+    // a later update.
+    const MAX_PER_UPDATE = 50;
+    let resolvedCount = 0;
+    let skipped = 0;
+
+    // New arrivals first, then any already-resident transaction that has never been
+    // resolved. The backlog matters at exactly one moment — the activation height —
+    // when every transaction sitting in the mempool was flagged under the old rules and
+    // would otherwise keep its unresolved flags until it confirmed or was evicted.
+    const backlog = Object.values(this.mempoolCache)
+      .filter((tx) => tx.bip110StatsConfidence === undefined && Common.hasAnyBIP110Violation(tx.flags));
+
+    const seen = new Set<string>();
+    for (const tx of [...newTransactions, ...backlog]) {
+      if (seen.has(tx.txid) || !Common.hasAnyBIP110Violation(tx.flags)) {
+        continue;
+      }
+      seen.add(tx.txid);
+      if (resolvedCount >= MAX_PER_UPDATE) {
+        tx.bip110StatsConfidence = 'degraded';
+        skipped++;
+        continue;
+      }
+      try {
+        const resolved = await bip110MempoolExemption.$resolveFlags(tx);
+        if (!resolved) {
+          continue;
+        }
+        resolvedCount++;
+        // Clear the BIP-110 bits, then re-apply only those that survived the exemption
+        const cleared = BigInt(tx.flags || 0) & ~Common.BIP110_VIOLATION_MASK;
+        tx.flags = Number(cleared | resolved.flags);
+        tx.bip110StatsConfidence = resolved.confidence;
+      } catch (e) {
+        logger.debug(`BIP-110 mempool exemption failed for ${tx.txid}: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    // Never let a cap silently look like full coverage
+    if (skipped > 0) {
+      logger.debug(`BIP-110: deferred exemption checks for ${skipped} transaction(s) this update (cap ${MAX_PER_UPDATE})`);
+    }
   }
 
   private startTimer() {

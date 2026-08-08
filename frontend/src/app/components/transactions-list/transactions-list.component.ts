@@ -7,7 +7,7 @@ import { ElectrsApiService } from '@app/services/electrs-api.service';
 import { environment } from '@environments/environment';
 import { AssetsService } from '@app/services/assets.service';
 import { filter, map, tap, switchMap, catchError } from 'rxjs/operators';
-import { BlockExtended } from '@interfaces/node-api.interface';
+import { BlockExtended, Bip110EnforcementContext } from '@interfaces/node-api.interface';
 import { ApiService } from '@app/services/api.service';
 import { PriceService } from '@app/services/price.service';
 import { StorageService } from '@app/services/storage.service';
@@ -15,7 +15,7 @@ import { OrdApiService } from '@app/services/ord-api.service';
 import { Inscription } from '@app/shared/ord/inscription.utils';
 import { Etching, Runestone } from '@app/shared/ord/rune.utils';
 import { ADDRESS_SIMILARITY_THRESHOLD, AddressMatch, AddressSimilarity, AddressType, AddressTypeInfo, checkedCompareAddressStrings, detectAddressType } from '@app/shared/address-utils';
-import { Bip110Service } from '@app/services/bip110.service';
+import { Bip110Service, Bip110Severity } from '@app/services/bip110.service';
 
 @Component({
   selector: 'app-transactions-list',
@@ -46,6 +46,8 @@ export class TransactionsListComponent implements OnInit, OnChanges {
   latestBlock$: Observable<BlockExtended>;
   outspendsSubscription: Subscription;
   currencyChangeSubscription: Subscription;
+  bip110Subscription: Subscription;
+  bip110Context: Bip110EnforcementContext | null = null;
   currency: string;
   refreshOutspends$: ReplaySubject<string[]> = new ReplaySubject();
   refreshChannels$: ReplaySubject<string[]> = new ReplaySubject();
@@ -146,6 +148,11 @@ export class TransactionsListComponent implements OnInit, OnChanges {
     .subscribe(currency => {
       this.currency = currency;
       this.refreshPrice();
+    });
+
+    this.bip110Subscription = this.stateService.bip110Deployment$.subscribe((deployment) => {
+      this.bip110Context = deployment?.enforcement ?? null;
+      this.ref.markForCheck();
     });
 
     this.updateAddressSimilarities();
@@ -515,10 +522,53 @@ export class TransactionsListComponent implements OnInit, OnChanges {
    * Get the list of BIP110 violations for a transaction
    */
   getBIP110Violations(tx: Transaction): string[] {
-    return Bip110Service.getViolationLabels(tx.flags);
+    return Bip110Service.getViolationLabels(tx.flags, this.getBIP110Severity(tx));
+  }
+
+  /**
+   * Severity for this transaction's height. Flags here are computed client-side without
+   * prevout heights, so an in-scope match can never be proven non-exempt — it stays
+   * 'uncertain' rather than being escalated to red.
+   */
+  getBIP110Severity(tx: Transaction): Bip110Severity {
+    const height = tx.status?.confirmed
+      ? (tx.status.block_height ?? this.stateService.latestBlockHeight)
+      : this.stateService.latestBlockHeight;
+    return Bip110Service.blockVerdict({
+      height, violationCount: 1, statsConfidence: 'degraded',
+    }, this.bip110Context).severity;
+  }
+
+  /** Shown when rule matches can't be confirmed, so silence isn't mistaken for a bug */
+  getBIP110ExemptNote(tx: Transaction): string | null {
+    return this.getBIP110Severity(tx) === 'uncertain' ? Bip110Service.EXEMPT_NOTE : null;
+  }
+
+  /**
+   * Heading for the violation tooltip, in the correct tense for this transaction's
+   * height. These flags are computed client-side without prevout heights, so they can
+   * never prove an input is non-exempt — hence "matches" rather than "is invalid" once
+   * the rules are live.
+   */
+  getBIP110ViolationHeading(tx: Transaction): string {
+    const height = tx.status?.confirmed
+      ? (tx.status.block_height ?? this.stateService.latestBlockHeight)
+      : this.stateService.latestBlockHeight;
+    const ctx = this.bip110Context;
+    if (Bip110Service.inEnforcementWindow(height, ctx)) {
+      return 'Matches BIP-110 rules (inputs unverified):';
+    }
+    if (Bip110Service.pendingEnforcement(height, ctx)) {
+      return `Will be invalid when BIP-110 activates at block ${ctx?.activationHeight}:`;
+    }
+    if (ctx?.state === 'expired') {
+      return 'Would have been invalid under BIP-110:';
+    }
+    return 'Would be invalid under BIP110:';
   }
 
   ngOnDestroy(): void {
+    this.bip110Subscription?.unsubscribe();
     this.outspendsSubscription.unsubscribe();
     this.currencyChangeSubscription?.unsubscribe();
   }

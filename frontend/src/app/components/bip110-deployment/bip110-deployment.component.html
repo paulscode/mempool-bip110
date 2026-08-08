@@ -24,20 +24,41 @@
                     <span class="mandatory-label">Mandatory signaling</span>
                   </ng-container>
                 </ng-container>
-                <ng-container *ngSwitchCase="'locked_in'">Activation confirmed</ng-container>
+                <ng-container *ngSwitchCase="'locked_in'">Activation confirmed &mdash; rules not yet enforced</ng-container>
                 <ng-container *ngSwitchCase="'active'">Rules enforced</ng-container>
-                <ng-container *ngSwitchCase="'expired'">Enforcement ended</ng-container>
+                <ng-container *ngSwitchCase="'expired'">Rules no longer enforced; UTXOs unrestricted</ng-container>
               </ng-container>
             </span>
           </div>
 
-          <!-- Center: progress bar (STARTED only) -->
-          <div class="deployment-center" *ngIf="d.state === 'started'">
+          <!-- Center: mandatory-mode progress bar.
+               During mandatory signaling the requirement is every block, not 55%, so a
+               bar with a threshold line at 55% would be actively misleading. -->
+          <div class="deployment-center" *ngIf="d.state === 'started' && d.inMandatorySignaling">
+            <div class="progress-bar-container">
+              <div class="progress-fill mandatory-fill"
+                   [ngClass]="{ 'has-violations': d.mandatoryNonSignalingCount > 0 }"
+                   [style.width.%]="d.signalingPercent">
+              </div>
+              <div class="threshold-line mandatory" [style.left.%]="100" data-label="100%"></div>
+            </div>
+            <div class="progress-label">
+              {{ d.periodSignaling | number }} of {{ d.periodBlocks | number }} signaled
+              &middot; every block must signal
+              <span class="non-signaling-count" *ngIf="d.mandatoryNonSignalingCount > 0">
+                &middot; {{ d.mandatoryNonSignalingCount }} non-signaling
+              </span>
+            </div>
+          </div>
+
+          <!-- Center: progress bar (STARTED, before mandatory signaling) -->
+          <div class="deployment-center" *ngIf="d.state === 'started' && !d.inMandatorySignaling">
             <div class="progress-bar-container">
               <div class="progress-fill" [ngClass]="{ 'threshold-reached': d.thresholdReached }"
                    [style.width.%]="d.signalingPercent">
               </div>
-              <div class="threshold-line" [style.left.%]="(d.threshold / 2016) * 100"></div>
+              <div class="threshold-line" [style.left.%]="(d.threshold / 2016) * 100"
+                   [attr.data-label]="((d.threshold / 2016) * 100 | number:'1.0-0') + '%'"></div>
             </div>
             <button type="button" class="progress-label progress-label-link"
                     *ngIf="d.recentSignalingBlocks?.length; else staticProgressLabel"
@@ -69,20 +90,32 @@
                 <span class="stat-value">{{ d.periodBlocks }}</span>
                 <span class="stat-label">Period</span>
               </div>
-              <div class="stat" *ngIf="!d.inMandatorySignaling">
+              <!-- Only meaningful while the window is still ahead of us; suppressed
+                   entirely when an early lock-in means it never applies -->
+              <div class="stat" *ngIf="!d.inMandatorySignaling && d.blocksUntilMandatory > 0">
                 <span class="stat-value">{{ d.blocksUntilMandatory | number }}</span>
                 <span class="stat-label">Until mandatory</span>
               </div>
-              <div class="stat" *ngIf="d.inMandatorySignaling">
-                <span class="stat-value mandatory-text">!</span>
-                <span class="stat-label mandatory-label">Mandatory</span>
-              </div>
+              <ng-container *ngIf="d.inMandatorySignaling">
+                <div class="stat">
+                  <span class="stat-value mandatory-text">!</span>
+                  <span class="stat-label mandatory-label">Mandatory</span>
+                </div>
+                <div class="stat" *ngIf="d.lockInHeight">
+                  <span class="stat-value">{{ d.lockInHeight - d.currentHeight | number }}</span>
+                  <span class="stat-label" i18n="bip110.stat.until-lockin">Until lock-in</span>
+                </div>
+              </ng-container>
             </ng-container>
 
             <ng-container *ngIf="d.state === 'locked_in' && d.activationHeight">
               <div class="stat">
                 <span class="stat-value">{{ d.activationHeight - d.currentHeight | number }}</span>
                 <span class="stat-label">Until activation</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value not-yet-enforced">—</span>
+                <span class="stat-label" i18n="bip110.stat.not-enforced">Rules not yet enforced</span>
               </div>
               <div class="stat">
                 <span class="stat-value">{{ d.activationHeight | number }}</span>
@@ -106,6 +139,10 @@
                 <span class="stat-value">{{ d.expiryHeight | number }}</span>
                 <span class="stat-label">Expired at height</span>
               </div>
+              <div class="stat">
+                <span class="stat-value not-yet-enforced">—</span>
+                <span class="stat-label" i18n="bip110.stat.unrestricted">UTXOs unrestricted</span>
+              </div>
             </ng-container>
 
             <ng-container *ngIf="d.state === 'defined'">
@@ -115,6 +152,45 @@
               </div>
             </ng-container>
           </div>
+        </div>
+
+        <!-- Chain divergence: the observable form of "BIP-110 did not succeed".
+             Only reachable on a node that does not enforce the rules — an enforcing
+             node could not have accepted the offending block. -->
+        <div class="chain-divergence-banner" *ngIf="d.enforcement?.chainVerdict === 'divergent'">
+          <span class="divergence-icon">&#9940;</span>
+          <span class="divergence-text">
+            <!-- &ngsp; survives Angular's default whitespace collapsing between elements,
+                 which otherwise renders this as "at block959,616" -->
+            <ng-container i18n="bip110.divergence|Chain divergence">Your node's chain diverges from the BIP-110 chain at block</ng-container>&ngsp;<a
+               [routerLink]="['/block' | relativeUrl, d.enforcement.firstDivergenceHeight]"
+               *ngIf="d.enforcement.firstDivergenceHeight != null">{{ d.enforcement.firstDivergenceHeight | number }}</a>
+            <ng-container [ngSwitch]="d.enforcement.divergenceReason">
+              <ng-container *ngSwitchCase="'non-signaling'" i18n="bip110.divergence.nonsignaling"> — that block does not signal during mandatory signaling.</ng-container>
+              <ng-container *ngSwitchCase="'violating-transactions'" i18n="bip110.divergence.violations"> — that block contains transactions that violate the BIP-110 rules.</ng-container>
+              <ng-container *ngSwitchDefault>.</ng-container>
+            </ng-container>
+          </span>
+        </div>
+
+        <!-- Node context. Every validity label on this page is conditional on it, so it
+             is stated plainly rather than left to be inferred. -->
+        <div class="node-context-line" *ngIf="d.enforcement as e">
+          <ng-container [ngSwitch]="e.nodeSupport">
+            <span *ngSwitchCase="'enforcing'" class="node-enforcing" i18n-title title="Detected via getdeploymentinfo">
+              &#10003; Your node enforces BIP-110{{ e.nodeSubversion ? ' (' + e.nodeSubversion + ')' : '' }}
+            </span>
+            <span *ngSwitchCase="'not-enforcing'" class="node-not-enforcing">
+              Your node does not enforce BIP-110{{ e.nodeSubversion ? ' (' + e.nodeSubversion + ')' : '' }}
+            </span>
+            <span *ngSwitchDefault class="node-unknown" i18n="bip110.node.unknown">
+              BIP-110 enforcement status unknown — validity is shown conditionally
+            </span>
+          </ng-container>&ngsp;<span class="chain-verdict" *ngIf="e.chainVerdict === 'compliant'" i18n="bip110.chain.compliant">
+            &middot; no violations observed since activation
+          </span>&ngsp;<span class="strict-off" *ngIf="e.strictVerdicts === false">
+            &middot; strict verdicts disabled
+          </span>
         </div>
 
         <!-- Recent signaling blocks modal -->
@@ -168,7 +244,7 @@
       <div class="scan-bar-track">
         <div class="scan-bar-fill" [style.width.%]="scan.pct"></div>
       </div>
-      <span class="scan-label">Scanning blocks for BIP-110 data: {{ scan.pct | number:'1.0-0' }}%</span>
+      <span class="scan-label">{{ scanLabel$ | async }}: {{ scan.pct | number:'1.0-0' }}%</span>
     </div>
   </ng-container>
 </div>

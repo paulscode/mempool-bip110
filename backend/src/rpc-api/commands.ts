@@ -30,6 +30,7 @@ module.exports = {
   getChainTips: 'getchaintips', // bitcoind v0.10.0+
   getChainTxStats: 'getchaintxstats',
   getConnectionCount: 'getconnectioncount',
+  getDeploymentInfo: 'getdeploymentinfo', // bitcoind v25.0+
   getDifficulty: 'getdifficulty',
   getGenerate: 'getgenerate',
   getInfo: 'getinfo',

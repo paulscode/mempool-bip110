@@ -170,6 +170,27 @@ interface IConfig {
   STRATUM: {
     ENABLED: boolean;
     API: string;
+  },
+  BIP110: {
+    // 'auto' = detect via getdeploymentinfo, true/false = force
+    ENFORCING: 'auto' | boolean;
+    // Kill switch: when false, no block is ever escalated to an "invalid" verdict and
+    // all wording stays conditional. Rollback path that needs no code deploy.
+    STRICT_VERDICTS: boolean;
+    // Deployment parameters. Defaults are the bip-0110.mediawiki values; overridable so
+    // the full activation timeline can be exercised on regtest or against shifted
+    // mainnet heights before it happens for real.
+    HEIGHTS: {
+      MANDATORY_SIGNALING_START: number;
+      MANDATORY_LOCK_IN: number;
+      MAX_ACTIVATION_HEIGHT: number;
+      ACTIVE_DURATION: number;
+      THRESHOLD: number;
+      START_TIME: number;
+      SIGNALING_BIT: number;
+      // No BIP110 violations are possible before Taproot activation
+      SCAN_FLOOR: number;
+    };
   }
 }
 
@@ -341,6 +362,20 @@ const defaults: IConfig = {
   'STRATUM': {
     'ENABLED': false,
     'API': 'http://localhost:1234',
+  },
+  'BIP110': {
+    'ENFORCING': 'auto',
+    'STRICT_VERDICTS': true,
+    'HEIGHTS': {
+      'MANDATORY_SIGNALING_START': 961632,
+      'MANDATORY_LOCK_IN': 963648,
+      'MAX_ACTIVATION_HEIGHT': 965664,
+      'ACTIVE_DURATION': 52416,
+      'THRESHOLD': 1109,
+      'START_TIME': 1764547200,
+      'SIGNALING_BIT': 4,
+      'SCAN_FLOOR': 709632,
+    },
   }
 };
 
@@ -365,6 +400,7 @@ class Config implements IConfig {
   FIAT_PRICE: IConfig['FIAT_PRICE'];
   WALLETS: IConfig['WALLETS'];
   STRATUM: IConfig['STRATUM'];
+  BIP110: IConfig['BIP110'];
 
   constructor() {
     const configs = this.merge(configFromFile, defaults);
@@ -388,6 +424,12 @@ class Config implements IConfig {
     this.FIAT_PRICE = configs.FIAT_PRICE;
     this.WALLETS = configs.WALLETS;
     this.STRATUM = configs.STRATUM;
+    // `merge` is shallow per top-level key, so a partial BIP110.HEIGHTS override in the
+    // config file would drop the rest of the defaults. Re-apply them explicitly.
+    this.BIP110 = {
+      ...configs.BIP110,
+      HEIGHTS: { ...defaults.BIP110.HEIGHTS, ...(configs.BIP110?.HEIGHTS || {}) },
+    };
   }
 
   merge = (...objects: object[]): IConfig => {

@@ -159,6 +159,20 @@
     "ENABLED": false,
     "API": "http://localhost:1234"
   },
+  "BIP110": {
+    "ENFORCING": "auto",
+    "STRICT_VERDICTS": true,
+    "HEIGHTS": {
+      "MANDATORY_SIGNALING_START": 961632,
+      "MANDATORY_LOCK_IN": 963648,
+      "MAX_ACTIVATION_HEIGHT": 965664,
+      "ACTIVE_DURATION": 52416,
+      "THRESHOLD": 1109,
+      "START_TIME": 1764547200,
+      "SIGNALING_BIT": 4,
+      "SCAN_FLOOR": 709632
+    }
+  },
   "FIAT_PRICE": {
     "ENABLED": true,
     "PAID": false,

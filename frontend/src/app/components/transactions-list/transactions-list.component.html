@@ -12,10 +12,11 @@
         </span>
         <ng-template #bip110Tooltip>
           <div class="bip110-tooltip">
-            <strong>Would be invalid under BIP110:</strong>
+            <strong>{{ getBIP110ViolationHeading(tx) }}</strong>
             <ul>
               <li *ngFor="let violation of getBIP110Violations(tx)">{{ violation }}</li>
             </ul>
+            <div class="bip110-exempt-note" *ngIf="getBIP110ExemptNote(tx) as note">{{ note }}</div>
           </div>
         </ng-template>
       </ng-container>

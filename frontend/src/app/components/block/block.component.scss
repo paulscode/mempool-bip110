@@ -88,6 +88,79 @@
   }
 }
 
+// ── Invalid block (red) ──────────────────────────────────────────────────────
+// The block is invalid under BIP-110 as of now. Only reachable on a node that does not
+// enforce the rules — an enforcing node could not have accepted this block.
+.bip110-invalid-glow {
+  position: relative;
+  background: linear-gradient(135deg,
+    rgba(255, 59, 48, 0.16) 0%,
+    rgba(255, 40, 30, 0.10) 25%,
+    rgba(255, 59, 48, 0.20) 50%,
+    rgba(255, 40, 30, 0.10) 75%,
+    rgba(255, 59, 48, 0.16) 100%) !important;
+  border-radius: 6px;
+  box-shadow:
+    0 0 30px rgba(255, 59, 48, 0.35),
+    0 0 60px rgba(255, 59, 48, 0.2),
+    inset 0 0 40px rgba(255, 59, 48, 0.1);
+  animation: bip110-invalid-container-pulse 2.5s ease-in-out infinite;
+  border: 1px solid rgba(255, 59, 48, 0.45);
+}
+
+@keyframes bip110-invalid-container-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 30px rgba(255, 59, 48, 0.35),
+      0 0 60px rgba(255, 59, 48, 0.2),
+      inset 0 0 40px rgba(255, 59, 48, 0.1);
+    border-color: rgba(255, 59, 48, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 50px rgba(255, 59, 48, 0.55),
+      0 0 100px rgba(255, 59, 48, 0.3),
+      inset 0 0 60px rgba(255, 59, 48, 0.18);
+    border-color: rgba(255, 59, 48, 0.75);
+  }
+}
+
+.alert-bip110-invalid {
+  background: rgba(255, 59, 48, 0.14);
+  border: 1px solid rgba(255, 59, 48, 0.5);
+  color: #ffb3ae;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .bip110-icon {
+    font-size: 18px;
+  }
+
+  .bip110-warning-text {
+    font-weight: 600;
+  }
+}
+
+// ── Milestone banner (gold) ──────────────────────────────────────────────────
+.bip110-milestone-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #ffd740 0%, #ffb300 100%);
+  color: #2b2000;
+  font-weight: 700;
+  font-size: 13px;
+  box-shadow: 0 0 14px rgba(255, 193, 7, 0.5);
+
+  .bip110-milestone-star {
+    font-size: 15px;
+  }
+}
+
 // BIP110 violation glow effect for the block view panel
 .bip110-violation-glow {
   position: relative;
@@ -417,6 +490,23 @@ h1 {
   position: relative;
   top: -1px;
   margin-right: 2px;
+}
+
+// BIP110 Invalid Badge for Block Page (rules actually enforced at this height)
+.badge-bip110-invalid-block {
+  background: linear-gradient(135deg, #ff3b30 0%, #ff5f57 50%, #ff3b30 100%);
+  color: #fff;
+  font-weight: bold;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  animation: bip110-invalid-badge-pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.7);
+}
+
+@keyframes bip110-invalid-badge-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(255, 59, 48, 0.7); }
+  50%      { box-shadow: 0 0 18px rgba(255, 59, 48, 1); }
 }
 
 // BIP110 Violation Badge for Block Page

@@ -239,19 +239,26 @@ class DiskCache {
       if (!this.ignoreBlocksCache) {
         blocks.setBlocks(data.blocks);
         blocks.setBlockSummaries(data.blockSummaries || []);
-        // Seed BIP110 cache with data from restored blocks
+        // Seed BIP110 cache with data from restored blocks.
+        // Only seed blocks that actually carry violation data: a `|| 0` fallback here
+        // would record an unknown block as "scanned, zero violations", which after
+        // activation is a block that should be red being painted green.
         if (data.blocks?.length) {
+          let seeded = 0;
           for (const block of data.blocks) {
-            if (block?.extras && block.height != null) {
+            if (block?.extras && block.height != null
+                && block.extras.bip110ViolationCount != null
+                && block.extras.bip110ViolationWeight != null) {
               bip110Cache.setBlockStats(
                 block.height,
-                block.extras.bip110ViolationCount || 0,
-                block.extras.bip110ViolationWeight || 0
+                block.extras.bip110ViolationCount,
+                block.extras.bip110ViolationWeight,
+                block.id
               );
-              bip110Cache.updateScanHeight(block.height);
+              seeded++;
             }
           }
-          logger.debug(`Seeded BIP110 cache with ${data.blocks.length} blocks from disk cache`);
+          logger.debug(`Seeded BIP110 cache with ${seeded}/${data.blocks.length} blocks from disk cache`);
         }
       } else {
         logger.info('Re-saving cache with empty recent blocks data');

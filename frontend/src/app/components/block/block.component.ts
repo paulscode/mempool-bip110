@@ -18,7 +18,8 @@ import { CacheService } from '@app/services/cache.service';
 import { ServicesApiServices } from '@app/services/services-api.service';
 import { PreloadService } from '@app/services/preload.service';
 import { identifyPrioritizedTransactions } from '@app/shared/transaction.utils';
-import { Bip110Service } from '@app/services/bip110.service';
+import { Bip110Service, BlockVerdict } from '@app/services/bip110.service';
+import { Bip110EnforcementContext } from '@interfaces/node-api.interface';
 
 @Component({
   selector: 'app-block',
@@ -71,6 +72,8 @@ export class BlockComponent implements OnInit, OnDestroy {
   mode: 'projected' | 'actual' = 'projected';
   currentQueryParams: Params;
   bip110ViolationCount: number = 0;
+  bip110Context: Bip110EnforcementContext | null = null;
+  bip110Subscription: Subscription;
 
   overviewSubscription: Subscription;
   accelerationsSubscription: Subscription;
@@ -116,6 +119,11 @@ export class BlockComponent implements OnInit, OnDestroy {
 
     this.timeLtrSubscription = this.stateService.timeLtr.subscribe((ltr) => {
       this.timeLtr = !!ltr;
+    });
+
+    this.bip110Subscription = this.stateService.bip110Deployment$.subscribe((deployment) => {
+      this.bip110Context = deployment?.enforcement ?? null;
+      this.cd.markForCheck();
     });
 
     this.setAuditAvailable(this.auditSupported);
@@ -436,6 +444,7 @@ export class BlockComponent implements OnInit, OnDestroy {
     this.isAuditEnabledSubscription?.unsubscribe();
     this.oobSubscription?.unsubscribe();
     this.priceSubscription?.unsubscribe();
+    this.bip110Subscription?.unsubscribe();
     this.blockGraphProjected.forEach(graph => {
       graph.destroy();
     });
@@ -478,6 +487,55 @@ export class BlockComponent implements OnInit, OnDestroy {
   hasBIP110Signaling(version: number): boolean {
     const versionBit = 4; // BIP110 'reduced_data' deployment (Reduced Data Temporary Softfork)
     return (Number(version) & (1 << versionBit)) === (1 << versionBit);
+  }
+
+  /**
+   * BIP-110 verdict for the block being viewed. Drives both the page glow and the
+   * tense of every validity label, so the two can never contradict each other.
+   */
+  get bip110Verdict(): BlockVerdict | null {
+    if (!this.block) {
+      return null;
+    }
+    return Bip110Service.blockVerdict({
+      height: this.block.height,
+      version: this.block.version,
+      violationCount: this.bip110ViolationCount,
+      statsConfidence: this.block.extras?.bip110StatsConfidence,
+    }, this.bip110Context);
+  }
+
+  get bip110IsInvalid(): boolean {
+    return this.bip110Verdict?.severity === 'invalid';
+  }
+
+  get bip110IsUncertain(): boolean {
+    return this.bip110Verdict?.severity === 'uncertain';
+  }
+
+  get bip110Tooltip(): string {
+    const verdict = this.bip110Verdict;
+    return verdict ? Bip110Service.blockTooltip(verdict, this.bip110Context) : '';
+  }
+
+  get bip110MilestoneLabel(): string | null {
+    const milestone = this.bip110Verdict?.milestone;
+    return milestone ? Bip110Service.milestoneLabel(milestone, this.bip110Context) : null;
+  }
+
+  /**
+   * Heading for the violations row — "Violations" only becomes an accusation once the
+   * rules are actually enforced for this block's height.
+   */
+  get bip110ViolationsLabel(): string {
+    const severity = this.bip110Verdict?.severity;
+    if (severity === 'invalid') {
+      return 'BIP-110 Violations';
+    }
+    if (severity === 'uncertain') {
+      return 'BIP-110 Rule Matches';
+    }
+    return 'BIP-110 Violations';
   }
 
   displayTaprootStatus(): boolean {

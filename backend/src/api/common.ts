@@ -31,6 +31,20 @@ const BIP110_MAX_PUSHDATA_SIZE = 256;         // Rule 2: Max OP_PUSHDATA* payloa
 const BIP110_MAX_CONTROL_BLOCK_SIZE = 257;    // Rule 5: Max Taproot control block size (128 script leaves)
 const BIP110_VERSION_BIT = 4;                 // BIP110 deployment 'reduced_data' signaling bit
 
+/**
+ * Context for evaluating the spec's pre-activation UTXO exemption.
+ *
+ * Both fields must be present for the exemption to apply: without prevout heights we
+ * cannot prove an input is exempt, and the caller is expected to mark such results as
+ * degraded confidence rather than escalating them to an "invalid" verdict.
+ */
+export interface Bip110FlagOptions {
+  /** Height at which the rules activate; omit when unknown (no exemption applied) */
+  activationHeight?: number | null;
+  /** Confirmation height of each vin's prevout, indexed to match tx.vin */
+  prevoutHeights?: (number | null | undefined)[];
+}
+
 export class Common {
   static nativeAssetId = config.MEMPOOL.NETWORK === 'liquidtestnet' ?
     '144c654344aa716d6f3abcc1ca90e5641e4e2a7f633bc09fe3baf64585819a49'
@@ -521,10 +535,11 @@ export class Common {
    *
    * Note: Inputs spending UTXOs created before activation height are exempt.
    */
-  static getBIP110Flags(tx: TransactionExtended): bigint {
+  static getBIP110Flags(tx: TransactionExtended, opts?: Bip110FlagOptions): bigint {
     let flags = 0n;
 
-    // Rule 1: Check output scriptPubKey sizes
+    // Rule 1: Check output scriptPubKey sizes.
+    // Output-side, so never exempt: it constrains outputs the transaction creates.
     for (const vout of tx.vout) {
       const scriptSize = vout.scriptpubkey.length / 2; // hex string to bytes
       if (vout.scriptpubkey_type === 'op_return') {
@@ -536,9 +551,23 @@ export class Common {
       }
     }
 
-    // Check inputs for rules 2-7
-    for (const vin of tx.vin) {
+    // Check inputs for rules 2-7.
+    //
+    // Per the spec: "Inputs spending UTXOs that were created before the activation
+    // height are exempt from the new rules." Rules 2-7 are all input-side, so an input
+    // whose prevout confirmed before activation contributes nothing, no matter what it
+    // contains. Without this the app would paint valid post-activation blocks red.
+    const activationHeight = opts?.activationHeight;
+    for (let i = 0; i < tx.vin.length; i++) {
+      const vin = tx.vin[i];
       if (vin.is_coinbase) continue;
+
+      if (activationHeight != null) {
+        const prevoutHeight = opts?.prevoutHeights?.[i];
+        if (prevoutHeight != null && prevoutHeight < activationHeight) {
+          continue; // exempt: spends a pre-activation UTXO
+        }
+      }
 
       flags |= this.checkBIP110WitnessRules(vin);
       flags |= this.checkBIP110ScriptSigRules(vin);

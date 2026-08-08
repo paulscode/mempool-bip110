@@ -6,6 +6,7 @@ import { BlockExtended, BlockExtension, BlockSummary, PoolTag, TransactionExtend
 import { Common } from './common';
 import diskCache from './disk-cache';
 import bip110Cache from './bip110-cache';
+import * as bip110Params from './bip110-params';
 import transactionUtils from './transaction-utils';
 import bitcoinClient from './bitcoin/bitcoin-client';
 import { IBitcoinApi } from './bitcoin/bitcoin-api.interface';
@@ -49,6 +50,8 @@ class Blocks {
   private newAsyncBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: MempoolTransactionExtended[]) => Promise<void>)[] = [];
   private classifyingBlocks: boolean = false;
   private bip110ScannerRunning: boolean = false;
+  /** undefined = not probed yet, true/false = node's getblock verbosity 3 support */
+  private bip110Verbosity3Supported: boolean | undefined = undefined;
   private noTxIndex: boolean = false;
 
   private mainLoopTimeout: number = 120000;
@@ -370,14 +373,48 @@ class Blocks {
     // BIP110 'reduced_data' miner signaling detection (version bit 4, 55% threshold)
     extras.bip110Signaling = Common.isSignalingBIP110(block.version);
 
-    // BIP110 violation count and weight - transactions that would be invalid under BIP110 rules
+    // BIP110 violation count and weight.
+    //
+    // This runs for every block as it arrives, so post-activation these are the blocks
+    // at the front of the dashboard — the ones a wrong verdict is most visible on. The
+    // transactions here carry prevout script types but no prevout heights, so for
+    // blocks the rules actually apply to we re-derive the stats from a verbosity-3
+    // getblock (one extra RPC per block, i.e. one per ~10 minutes) which does carry
+    // them, and only fall back to the local computation if that fails.
     extras.bip110ViolationCount = 0;
     extras.bip110ViolationWeight = 0;
-    for (const tx of transactions) {
-      const flags = Common.getBIP110Flags(tx);
-      if (flags !== 0n) {
-        extras.bip110ViolationCount++;
-        extras.bip110ViolationWeight += tx.weight;
+    extras.bip110StatsConfidence = 'exact';
+
+    const enforcedHeight = bip110Params.bip110Context.isEnforcedHeight(block.height);
+    let computed = false;
+    if (enforcedHeight) {
+      try {
+        const stats = await this.$computeBIP110StatsForBlock(block.id, block.height);
+        extras.bip110ViolationCount = stats.count;
+        extras.bip110ViolationWeight = stats.weight;
+        extras.bip110StatsConfidence = stats.confidence;
+        computed = true;
+      } catch (e) {
+        logger.debug(`BIP110: verbosity-3 stats failed for block ${block.height}, using local flags: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+    if (!computed) {
+      for (const tx of transactions) {
+        const flags = Common.getBIP110Flags(tx);
+        if (flags !== 0n) {
+          extras.bip110ViolationCount++;
+          extras.bip110ViolationWeight += tx.weight;
+        }
+      }
+      // No prevout heights available here, so an in-scope hit cannot be proven
+      // non-exempt. Mark it degraded rather than letting the UI escalate it to red.
+      //
+      // "Context not yet known" counts as in-scope for this purpose: we cannot rule the
+      // height out, these counts get cached, and a later reader — once the context does
+      // exist — would otherwise treat them as exemption-aware and paint the block red.
+      const scopeUnknown = bip110Params.bip110Context.get() == null;
+      if ((enforcedHeight || scopeUnknown) && extras.bip110ViolationCount > 0) {
+        extras.bip110StatsConfidence = 'degraded';
       }
     }
 
@@ -961,6 +998,9 @@ class Blocks {
           this.updateTimerProgress(timer, `got block by height for ${this.currentBlockHeight}`);
           if (lastBlock !== null && blockExtended.previousblockhash !== lastBlock.id) {
             logger.warn(`Chain divergence detected at block ${lastBlock.height}, re-indexing most recent data`, logger.tags.mining);
+            // Violation stats are keyed by height, so anything at or above the fork
+            // point now describes a block that is no longer on the chain.
+            bip110Cache.invalidateFrom(lastBlock.height - 10);
             // We assume there won't be a reorg with more than 10 block depth
             this.updateTimerProgress(timer, `rolling back diverged chain from ${this.currentBlockHeight}`);
             await BlocksRepository.$deleteBlocksFrom(lastBlock.height - 10);
@@ -1078,13 +1118,13 @@ class Blocks {
       }
 
       // Persist BIP110 violation stats to the BIP110 cache
-      if (blockExtended.extras) {
+      if (blockExtended.extras && blockExtended.extras.bip110ViolationCount != null) {
         bip110Cache.setBlockStats(
           blockExtended.height,
-          blockExtended.extras.bip110ViolationCount || 0,
-          blockExtended.extras.bip110ViolationWeight || 0
+          blockExtended.extras.bip110ViolationCount,
+          blockExtended.extras.bip110ViolationWeight || 0,
+          blockExtended.id
         );
-        bip110Cache.updateScanHeight(blockExtended.height);
       }
 
       if (this.newBlockCallbacks.length) {
@@ -1357,8 +1397,13 @@ class Blocks {
       await BlocksSummariesRepository.$saveTransactions(height, hash, summary.transactions, summaryVersion);
     }
 
-    // Save BIP110 violation stats to persistent cache when block summaries are computed
-    if (height != null && summary?.transactions?.length) {
+    // Save BIP110 violation stats to persistent cache when block summaries are computed.
+    //
+    // Summary flags carry no exemption information, so for blocks the rules apply to
+    // this would clobber an exemption-aware count with a raw one. Skip those heights and
+    // let the verbosity-3 path own them.
+    if (height != null && summary?.transactions?.length
+        && !bip110Params.bip110Context.isEnforcedHeight(height)) {
       let violationCount = 0;
       let violationWeight = 0;
       for (const tx of summary.transactions) {
@@ -1367,7 +1412,7 @@ class Blocks {
           violationWeight += (tx.vsize || 0) * 4;
         }
       }
-      bip110Cache.setBlockStats(height, violationCount, violationWeight);
+      bip110Cache.setBlockStats(height, violationCount, violationWeight, hash);
     }
 
     return summary.transactions;
@@ -1405,15 +1450,76 @@ class Blocks {
   }
 
   /**
+   * Confidence to report for stats read back from the persistent cache.
+   *
+   * The cache stores counts but not how they were derived, and verbosity-3 support is a
+   * property of the node rather than of any one block — so if the node cannot supply
+   * prevout heights, every in-scope block's stats were necessarily computed without the
+   * exemption and must not be escalated to an "invalid" verdict.
+   */
+  private getBIP110StatsConfidence(height: number): 'exact' | 'degraded' {
+    if (bip110Params.bip110Context.get() == null) {
+      return 'degraded'; // scope unknown — cannot claim these counts are exemption-aware
+    }
+    if (!bip110Params.bip110Context.isEnforcedHeight(height)) {
+      return 'exact'; // out of scope: the exemption is a no-op, nothing to degrade
+    }
+    return this.bip110Verbosity3Supported === false ? 'degraded' : 'exact';
+  }
+
+  /**
    * Compute BIP110 violation stats for a single block by fetching it
    * from Bitcoin Core with full verbosity and analyzing all transactions.
+   *
+   * Prefers getblock verbosity 3, which returns per-input prevout data
+   * ({ generated, height, value, scriptPubKey }) from the undo files. That gives two
+   * things verbosity 2 cannot:
+   *   - prevout confirmation heights, which the spec's pre-activation UTXO exemption
+   *     requires (rules 2-7 do not apply to inputs spending pre-activation UTXOs);
+   *   - real prevout script types, instead of inferring taproot script-path spends from
+   *     witness structure, which is the documented source of false positives.
+   *
+   * Falls back to verbosity 2 on nodes that don't support it (older Core, or pruned
+   * blocks with no undo data). `confidence: 'degraded'` then propagates to the UI so
+   * those blocks show as unverified amber rather than being escalated to red.
    */
-  public async $computeBIP110StatsForBlock(blockHash: string): Promise<{ count: number; weight: number }> {
-    const verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
+  public async $computeBIP110StatsForBlock(blockHash: string, height?: number): Promise<{ count: number; weight: number; confidence: 'exact' | 'degraded' }> {
+    let verboseBlock: any;
+    let havePrevouts = false;
+
+    if (this.bip110Verbosity3Supported !== false) {
+      try {
+        verboseBlock = await bitcoinClient.getBlock(blockHash, 3);
+        havePrevouts = true;
+        if (this.bip110Verbosity3Supported === undefined) {
+          this.bip110Verbosity3Supported = true;
+          logger.info('BIP110: using getblock verbosity 3 (prevout data available)');
+        }
+      } catch (e) {
+        if (this.bip110Verbosity3Supported === undefined) {
+          this.bip110Verbosity3Supported = false;
+          logger.notice('BIP110: getblock verbosity 3 unavailable, falling back to verbosity 2 — '
+            + 'prevout heights are unknown, so post-activation verdicts will stay unverified. '
+            + `Reason: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+    if (!verboseBlock) {
+      verboseBlock = await bitcoinClient.getBlock(blockHash, 2);
+    }
+
+    // The exemption only matters for blocks the rules actually apply to. Below the
+    // activation height every input spends a pre-activation UTXO, so applying it there
+    // would be a no-op, and history never needs rescanning when activation is settled.
+    const activationHeight = bip110Params.bip110Context.getActivationHeight();
+    const enforced = height != null && activationHeight != null
+      && bip110Params.bip110Context.isEnforcedHeight(height);
+
     let count = 0;
     let weight = 0;
 
     for (const vtx of verboseBlock.tx) {
+      const prevoutHeights: (number | null)[] = [];
       const esploraLikeTx: IEsploraApi.Transaction = {
         txid: vtx.txid,
         version: vtx.version,
@@ -1421,18 +1527,28 @@ class Blocks {
         size: vtx.size,
         weight: vtx.weight,
         fee: vtx.fee ? Math.round(vtx.fee * 100000000) : 0,
-        vin: vtx.vin.map(vin => ({
-          is_coinbase: !!vin.coinbase,
-          prevout: null,
-          scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
-          scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
-          sequence: vin.sequence,
-          txid: vin.txid || '',
-          vout: vin.vout || 0,
-          witness: vin.txinwitness || [],
-          inner_redeemscript_asm: '',
-          inner_witnessscript_asm: '',
-        })),
+        vin: vtx.vin.map(vin => {
+          const prevout = vin.prevout;
+          prevoutHeights.push(prevout?.height ?? null);
+          return {
+            is_coinbase: !!vin.coinbase,
+            prevout: prevout?.scriptPubKey ? {
+              value: Math.round((prevout.value || 0) * 100000000),
+              scriptpubkey: prevout.scriptPubKey.hex || '',
+              scriptpubkey_address: prevout.scriptPubKey.address || '',
+              scriptpubkey_asm: prevout.scriptPubKey.hex ? transactionUtils.convertScriptSigAsm(prevout.scriptPubKey.hex) : '',
+              scriptpubkey_type: BitcoinApi.translateScriptPubKeyType(prevout.scriptPubKey.type),
+            } : null,
+            scriptsig: vin.scriptSig?.hex || vin.coinbase || '',
+            scriptsig_asm: vin.scriptSig ? transactionUtils.convertScriptSigAsm(vin.scriptSig.hex) : '',
+            sequence: vin.sequence,
+            txid: vin.txid || '',
+            vout: vin.vout || 0,
+            witness: vin.txinwitness || [],
+            inner_redeemscript_asm: '',
+            inner_witnessscript_asm: '',
+          };
+        }),
         vout: vtx.vout.map(vout => ({
           value: Math.round(vout.value * 100000000),
           scriptpubkey: vout.scriptPubKey.hex,
@@ -1443,14 +1559,26 @@ class Blocks {
         status: { confirmed: true },
       };
       const extTx = transactionUtils.extendTransaction(esploraLikeTx);
-      const flags = Common.getBIP110Flags(extTx);
+      const flags = Common.getBIP110Flags(extTx, enforced && havePrevouts
+        ? { activationHeight, prevoutHeights }
+        : undefined);
       if (flags !== 0n) {
         count++;
         weight += vtx.weight || 0;
       }
     }
 
-    return { count, weight };
+    // Only in-scope blocks can be escalated to "invalid", so degraded data only matters
+    // there; historical blocks are conditional-wording amber either way.
+    //
+    // If the deployment context is unknown we could not decide whether to apply the
+    // exemption, so these counts are raw regardless of what the height turns out to be.
+    // Never report them as exemption-aware.
+    const scopeUnknown = bip110Params.bip110Context.get() == null;
+    const confidence: 'exact' | 'degraded' = scopeUnknown
+      ? 'degraded'
+      : ((!enforced || havePrevouts) ? 'exact' : 'degraded');
+    return { count, weight, confidence };
   }
 
   /**
@@ -1488,10 +1616,19 @@ class Blocks {
           // Also check for missing weight (added later)
           if (block.extras.bip110ViolationCount === undefined || block.extras.bip110ViolationCount === null ||
               block.extras.bip110ViolationWeight === undefined || block.extras.bip110ViolationWeight === null) {
-            // Calculate violation count and weight from block summary
-            const stats = await this.$getBIP110ViolationStats(block.id);
-            block.extras.bip110ViolationCount = stats.count;
-            block.extras.bip110ViolationWeight = stats.weight;
+            if (bip110Params.bip110Context.isEnforcedHeight(currentHeight)) {
+              // In-scope: needs the exemption-aware path, not summary-derived flags
+              const stats = await this.$computeBIP110StatsForBlock(block.id, currentHeight);
+              block.extras.bip110ViolationCount = stats.count;
+              block.extras.bip110ViolationWeight = stats.weight;
+              block.extras.bip110StatsConfidence = stats.confidence;
+              bip110Cache.setBlockStats(currentHeight, stats.count, stats.weight, block.id);
+            } else {
+              // Calculate violation count and weight from block summary
+              const stats = await this.$getBIP110ViolationStats(block.id);
+              block.extras.bip110ViolationCount = stats.count;
+              block.extras.bip110ViolationWeight = stats.weight;
+            }
           }
         }
         returnBlocks.push(block);
@@ -1502,17 +1639,20 @@ class Blocks {
         // ($indexBlock only fetches coinbase, so violation data is always 0 without this)
         if (block.extras) {
           block.extras.bip110Signaling = Common.isSignalingBIP110(block.version);
-          const cachedStats = bip110Cache.getBlockStats(currentHeight);
+          // Pass the hash so an entry left behind by a reorg is treated as a miss
+          const cachedStats = bip110Cache.getBlockStats(currentHeight, block.id);
           if (cachedStats) {
             block.extras.bip110ViolationCount = cachedStats.count;
             block.extras.bip110ViolationWeight = cachedStats.weight;
+            block.extras.bip110StatsConfidence = this.getBIP110StatsConfidence(currentHeight);
           } else {
             // Not yet scanned — compute on the fly from the verbose block
             try {
-              const stats = await this.$computeBIP110StatsForBlock(block.id);
+              const stats = await this.$computeBIP110StatsForBlock(block.id, currentHeight);
               block.extras.bip110ViolationCount = stats.count;
               block.extras.bip110ViolationWeight = stats.weight;
-              bip110Cache.setBlockStats(currentHeight, stats.count, stats.weight);
+              block.extras.bip110StatsConfidence = stats.confidence;
+              bip110Cache.setBlockStats(currentHeight, stats.count, stats.weight, block.id);
             } catch (e) {
               logger.debug(`Failed to compute BIP110 stats for block ${currentHeight}: ${e instanceof Error ? e.message : e}`);
             }
@@ -1753,20 +1893,29 @@ class Blocks {
   /**
    * Background scanner for BIP110 violation stats.
    *
-   * Progressively scans historic blocks (from tip downward) to compute
-   * BIP110 violation counts for the persistent cache. This allows the UI
-   * to show violation decorations on historic blocks even though
-   * $indexBlock() only fetches the coinbase for performance reasons.
+   * Progressively scans blocks (from tip downward) to compute BIP110 violation counts
+   * for the persistent cache. This allows the UI to show violation decorations on
+   * historic blocks even though $indexBlock() only fetches the coinbase for performance.
    *
-   * Uses getblock(hash, 2) RPC to fetch full verbose blocks, then runs
-   * the same BIP110 analysis as the real-time block processing path.
+   * Two passes, in priority order:
+   *   1. tip -> activation height — blocks whose verdict can be "invalid". Correct
+   *      red/amber has to appear within minutes on a post-activation install, not hours.
+   *   2. activation height -> Taproot activation — the historical "would have violated"
+   *      range, which is informational only and must never delay pass 1.
+   * Before activation the whole range is pass 2, since nothing can be invalid yet.
    *
-   * Only scans blocks from Taproot activation (709,632) onward, since
-   * BIP110 violations require tapscript spends which are impossible
-   * before Taproot.
+   * Starts at the chain tip rather than below the memory cache: the newest blocks are
+   * exactly the consensus-relevant ones after activation, and relying on the real-time
+   * path alone leaves a hole after any restart that missed blocks. Already-scanned
+   * heights skip in microseconds.
    *
-   * Progress is shown via the loadingIndicators system (visible as
-   * "BIP110 Scan (XX%)" in the frontend).
+   * Near the tip, cached entries are validated against the block hash so a reorged
+   * height is rescanned. Below that, heights are trusted on their own: deep reorgs are
+   * not a realistic concern and hash-checking a quarter of a million historical heights
+   * would add an RPC per block to a path that is currently free.
+   *
+   * Runs forever, sleeping between sweeps, so long-running instances self-heal after
+   * missed blocks instead of exiting permanently after the first pass.
    *
    * @param delayMs Milliseconds to wait between processing blocks (throttle)
    */
@@ -1776,86 +1925,148 @@ class Blocks {
     }
     this.bip110ScannerRunning = true;
 
-    // Taproot activation height — no BIP110 violations are possible before this
-    const TAPROOT_ACTIVATION = 709632;
-
     // Wait for the main loop to establish the chain tip
     while (this.currentBlockHeight <= 0) {
       await Common.sleep$(5000);
     }
 
-    // Always start scanning from just below the memory cache so we never
-    // leave a gap between the memory cache and previously-scanned blocks.
-    // Already-scanned blocks will be skipped quickly via isScanned().
-    const chainTip = this.currentBlockHeight;
-    const memCacheBottom = chainTip - (config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
+    const IDLE_SLEEP_MS = 60000;      // between sweeps once everything is covered
+    const TIP_VERIFY_DEPTH = 100;     // hash-verify cached entries within this of the tip
 
-    // DO NOT blanket-mark memCacheBottom as scanned — only blocks with actual
-    // violation data in the cache should be treated as scanned.  The scanner
-    // will process any un-scanned blocks in this range on its way down.
-    let scanHeight = memCacheBottom;
-
-    logger.info(`BIP110 background scanner starting from height ${scanHeight}, working downward to ${TAPROOT_ACTIVATION}`);
-
-    // Progress is based on distance from chainTip to TAPROOT_ACTIVATION (not block 0)
-    const totalRange = chainTip - TAPROOT_ACTIVATION;
-    const calcProgress = (h: number): number => {
-      if (totalRange <= 0) return 99;
-      return Math.min(99, Math.round(((chainTip - h) / totalRange) * 100));
-    };
-    loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
-
-    let consecutiveErrors = 0;
-    let skippedCount = 0;
-
-    while (scanHeight >= TAPROOT_ACTIVATION) {
-      // Check if this height was already scanned
-      if (bip110Cache.isScanned(scanHeight)) {
-        skippedCount++;
-        scanHeight--;
-        // Batch-skip: yield and update progress every 10000 blocks
-        if (skippedCount % 10000 === 0) {
-          loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
-          await Common.sleep$(10);
-        }
-        continue;
-      }
-      skippedCount = 0;
-
-      try {
-        const blockHash = await bitcoinApi.$getBlockHash(scanHeight);
-        const stats = await this.$computeBIP110StatsForBlock(blockHash);
-
-        bip110Cache.setBlockStats(scanHeight, stats.count, stats.weight);
-        bip110Cache.updateScanHeight(scanHeight);
-        consecutiveErrors = 0;
-
-        // Update progress indicator and persist periodically
-        if (scanHeight % 100 === 0) {
-          loadingIndicators.setProgress('bip110-scan', calcProgress(scanHeight));
-          logger.debug(`BIP110 scanner: height ${scanHeight}, ${bip110Cache.getScannedBlockCount()} scanned, ${bip110Cache.getViolationBlockCount()} with violations`);
-          await bip110Cache.saveToDisk();
-        }
-
-      } catch (e) {
-        consecutiveErrors++;
-        logger.warn(`BIP110 scanner: failed to scan block ${scanHeight}: ${e instanceof Error ? e.message : e}`);
-        if (consecutiveErrors > 10) {
-          logger.warn('BIP110 scanner: too many consecutive errors, pausing for 60 seconds');
-          await Common.sleep$(60000);
-          consecutiveErrors = 0;
-        }
-      }
-
-      scanHeight--;
-      await Common.sleep$(delayMs);
+    // Wait (briefly) for the deployment context before the first sweep. The sweep splits
+    // its work at the activation height so consensus-relevant blocks are covered first;
+    // starting before that height is known would send the longest sweep of the app's
+    // life — the one on a fresh install — down the wrong end of the chain.
+    const CONTEXT_WAIT_MS = 60000;
+    const waitUntil = Date.now() + CONTEXT_WAIT_MS;
+    while (bip110Params.bip110Context.get() == null && Date.now() < waitUntil) {
+      await Common.sleep$(2000);
+    }
+    if (bip110Params.bip110Context.get() == null) {
+      logger.debug('BIP110 scanner: starting without a deployment context; scan order will be corrected on the next sweep');
     }
 
-    // Mark scan complete — setProgress(100) removes the indicator from the UI
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        await this.$runBIP110ScanSweep(delayMs, TIP_VERIFY_DEPTH);
+      } catch (e) {
+        logger.warn(`BIP110 scanner sweep failed: ${e instanceof Error ? e.message : e}`);
+      }
+      await Common.sleep$(IDLE_SLEEP_MS);
+    }
+  }
+
+  /**
+   * One pass over every height that still needs BIP110 stats, highest priority first.
+   */
+  private async $runBIP110ScanSweep(delayMs: number, tipVerifyDepth: number): Promise<void> {
+    const floor = bip110Params.BIP110_PARAMS.scanFloor;
+    const chainTip = this.currentBlockHeight;
+    if (chainTip < floor) {
+      loadingIndicators.setProgress('bip110-scan', 100);
+      return;
+    }
+
+    // Without a deployment context we cannot tell which heights the rules apply to, so
+    // any stats computed now would be raw counts cached as though they were
+    // exemption-aware. Skip the sweep and retry — the deployment tracker publishes the
+    // context every 30 seconds, so this resolves on its own.
+    if (bip110Params.bip110Context.get() == null) {
+      logger.debug('BIP110 scanner: no deployment context yet, deferring sweep');
+      return;
+    }
+
+    // Split the range at the activation height when one is known, so consensus-relevant
+    // blocks are always covered before the informational history.
+    const activationHeight = bip110Params.bip110Context.getActivationHeight();
+    const ranges: { from: number, to: number, label: string }[] = [];
+    if (activationHeight != null && activationHeight <= chainTip && activationHeight > floor) {
+      ranges.push({ from: activationHeight, to: chainTip, label: 'enforced' });
+      ranges.push({ from: floor, to: activationHeight - 1, label: 'historical' });
+    } else {
+      ranges.push({ from: floor, to: chainTip, label: 'historical' });
+    }
+
+    // Progress reflects work remaining, not distance travelled, so a fully-scanned
+    // restart reports 100% immediately instead of flashing 0 -> 99 -> 100.
+    const pending = this.countPendingBIP110Heights(ranges);
+    if (pending === 0) {
+      loadingIndicators.setProgress('bip110-scan', 100);
+      return;
+    }
+    logger.info(`BIP110 scanner sweep: ${pending} block(s) pending across [${floor}, ${chainTip}]`);
+
+    let done = 0;
+    let consecutiveErrors = 0;
+    const reportProgress = (): void => {
+      loadingIndicators.setProgress('bip110-scan', Math.min(99, Math.round((done / pending) * 100)));
+    };
+    reportProgress();
+
+    for (const range of ranges) {
+      for (let height = range.to; height >= range.from; height--) {
+        const verifyHash = height > chainTip - tipVerifyDepth;
+
+        let blockHash: string | null = null;
+        if (verifyHash) {
+          try {
+            blockHash = await bitcoinApi.$getBlockHash(height);
+          } catch (e) {
+            // fall through and treat as unverifiable; retried next sweep
+          }
+        }
+        if (bip110Cache.isScanned(height, blockHash)) {
+          continue;
+        }
+
+        try {
+          if (!blockHash) {
+            blockHash = await bitcoinApi.$getBlockHash(height);
+          }
+          const stats = await this.$computeBIP110StatsForBlock(blockHash, height);
+          bip110Cache.setBlockStats(height, stats.count, stats.weight, blockHash);
+          consecutiveErrors = 0;
+          done++;
+
+          if (done % 100 === 0) {
+            reportProgress();
+            logger.debug(`BIP110 scanner (${range.label}): height ${height}, ${done}/${pending} this sweep, ${bip110Cache.getViolationBlockCount()} blocks with violations`);
+            await bip110Cache.saveToDisk();
+          }
+        } catch (e) {
+          consecutiveErrors++;
+          logger.warn(`BIP110 scanner: failed to scan block ${height}: ${e instanceof Error ? e.message : e}`);
+          if (consecutiveErrors > 10) {
+            logger.warn('BIP110 scanner: too many consecutive errors, pausing for 60 seconds');
+            await Common.sleep$(60000);
+            consecutiveErrors = 0;
+          }
+        }
+
+        await Common.sleep$(delayMs);
+      }
+    }
+
     loadingIndicators.setProgress('bip110-scan', 100);
-    logger.notice(`BIP110 background scan complete: ${bip110Cache.getScannedBlockCount()} blocks scanned, ${bip110Cache.getViolationBlockCount()} with violations`);
+    logger.notice(`BIP110 scan sweep complete: ${bip110Cache.getScannedBlockCount()} blocks scanned, ${bip110Cache.getViolationBlockCount()} with violations`);
     await bip110Cache.saveToDisk();
-    this.bip110ScannerRunning = false;
+  }
+
+  /**
+   * How many heights in the given ranges still need scanning (height-only check —
+   * the per-block hash verification happens during the sweep itself).
+   */
+  private countPendingBIP110Heights(ranges: { from: number, to: number }[]): number {
+    let pending = 0;
+    for (const range of ranges) {
+      for (let h = range.from; h <= range.to; h++) {
+        if (!bip110Cache.isScanned(h)) {
+          pending++;
+        }
+      }
+    }
+    return pending;
   }
 }
 

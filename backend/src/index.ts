@@ -10,6 +10,8 @@ import blocks from './api/blocks';
 import memPool from './api/mempool';
 import diskCache from './api/disk-cache';
 import bip110Cache from './api/bip110-cache';
+import bip110NodeSupport from './api/bip110-node-support';
+import bip110Deployment from './api/bip110-deployment';
 import statistics from './api/statistics/statistics';
 import websocketHandler from './api/websocket-handler';
 import logger from './logger';
@@ -173,6 +175,9 @@ class Server {
       }
       // Load BIP110 violation stats cache
       bip110Cache.loadFromDisk();
+      // Detect whether the connected node implements/enforces BIP-110. Everything the
+      // UI says about validity is conditional on this, so start it early.
+      bip110NodeSupport.start();
     }
 
     if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED && cluster.isPrimary) {
@@ -336,6 +341,8 @@ class Server {
       priceUpdater.setRatesChangedCallback(websocketHandler.handleNewConversionRates.bind(websocketHandler));
     }
     loadingIndicators.setProgressChangedCallback(websocketHandler.handleLoadingChanged.bind(websocketHandler));
+    bip110NodeSupport.onChange(websocketHandler.handleBip110DeploymentChanged.bind(websocketHandler));
+    bip110Deployment.onChange(websocketHandler.handleBip110DeploymentChanged.bind(websocketHandler));
 
     accelerationApi.connectWebsocket();
     if (config.STRATUM.ENABLED) {

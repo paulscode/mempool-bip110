@@ -2,9 +2,10 @@ import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRe
 import { Observable, Subscription, delay, filter, tap } from 'rxjs';
 import { StateService } from '@app/services/state.service';
 import { specialBlocks } from '@app/app.constants';
-import { BlockExtended } from '@interfaces/node-api.interface';
+import { BlockExtended, Bip110EnforcementContext } from '@interfaces/node-api.interface';
 import { Location } from '@angular/common';
 import { CacheService } from '@app/services/cache.service';
+import { Bip110Service, BlockVerdict } from '@app/services/bip110.service';
 
 interface BlockchainBlock extends BlockExtended {
   placeholder?: boolean;
@@ -59,6 +60,9 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
   blocksFilled = false;
   arrowTransition = '1s';
   timeLtrSubscription: Subscription;
+  bip110Subscription: Subscription;
+  /** Enforcement context: whether the node enforces the rules, and which heights they apply to */
+  bip110Context: Bip110EnforcementContext | null = null;
   timeLtr: boolean;
 
   blockOffset: number = 155;
@@ -84,6 +88,11 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
 
   ngOnInit() {
     this.dynamicBlocksAmount = Math.min(8, this.stateService.env.KEEP_BLOCKS_AMOUNT);
+
+    this.bip110Subscription = this.stateService.bip110Deployment$.subscribe((deployment) => {
+      this.bip110Context = deployment?.enforcement ?? null;
+      this.cd.markForCheck();
+    });
 
     this.blockDisplayMode = this.stateService.blockDisplayMode$.value as 'size' | 'fees';
     this.blockDisplayModeSubscription = this.stateService.blockDisplayMode$
@@ -226,6 +235,9 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
     this.markBlockSubscription.unsubscribe();
     this.blockDisplayModeSubscription.unsubscribe();
     this.timeLtrSubscription.unsubscribe();
+    if (this.bip110Subscription) {
+      this.bip110Subscription.unsubscribe();
+    }
     clearInterval(this.interval);
   }
 
@@ -334,6 +346,23 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
     return this.specialBlocks[height]?.networks.includes(this.stateService.network || 'mainnet') ? true : false;
   }
 
+  /**
+   * Classify a block for display. Everything the template needs — colour class, badges,
+   * tooltip, milestone ribbon — comes from here, so wording and colour can never
+   * disagree about whether a block is invalid or merely non-compliant with a proposal.
+   */
+  getVerdict(block: BlockchainBlock): BlockVerdict | null {
+    if (!block || block.height == null) {
+      return null;
+    }
+    return Bip110Service.blockVerdict({
+      height: block.height,
+      version: block.version,
+      violationCount: block.extras?.bip110ViolationCount,
+      statsConfidence: block.extras?.bip110StatsConfidence,
+    }, this.bip110Context);
+  }
+
   hasBIP110Signaling(block: BlockchainBlock): boolean {
     if (!block || !block.version) {
       return false;
@@ -342,8 +371,26 @@ export class BlockchainBlocksComponent implements OnInit, OnChanges, OnDestroy {
     return (Number(block.version) & (1 << versionBit)) === (1 << versionBit);
   }
 
+  /** Amber: violations that are not (or not yet, or not verifiably) consensus failures */
   hasBIP110Violations(block: BlockchainBlock): boolean {
-    return block?.extras?.bip110ViolationCount != null && block.extras.bip110ViolationCount > 0;
+    const severity = this.getVerdict(block)?.severity;
+    return severity === 'hypothetical' || severity === 'pending' || severity === 'uncertain';
+  }
+
+  /** Red: the block is invalid under BIP-110 as of now */
+  isBIP110Invalid(block: BlockchainBlock): boolean {
+    return this.getVerdict(block)?.severity === 'invalid';
+  }
+
+  /** Gold ribbon: this height is a deployment milestone */
+  getBIP110Milestone(block: BlockchainBlock): string | null {
+    const milestone = this.getVerdict(block)?.milestone;
+    return milestone ? Bip110Service.milestoneLabel(milestone, this.bip110Context) : null;
+  }
+
+  getBIP110Tooltip(block: BlockchainBlock): string {
+    const verdict = this.getVerdict(block);
+    return verdict ? Bip110Service.blockTooltip(verdict, this.bip110Context) : '';
   }
 
   getBIP110ViolationCount(block: BlockchainBlock): number {

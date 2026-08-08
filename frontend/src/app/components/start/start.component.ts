@@ -21,6 +21,9 @@ export class StartComponent implements OnInit, AfterViewChecked, OnDestroy {
   countdown = 0;
   specialEvent = false;
   eventName = '';
+  /** BIP-110 milestone heights, sourced from the deployment stream (not constants) */
+  bip110Milestones: { height: number, label: string, completedLabel: string }[] = [];
+  bip110Subscription: Subscription;
   mouseDragStartX: number;
   blockchainScrollLeftInit: number;
   timeLtrSubscription: Subscription;
@@ -131,6 +134,31 @@ export class StartComponent implements OnInit, AfterViewChecked, OnDestroy {
         }
       }
     });
+    this.bip110Subscription = this.stateService.bip110Deployment$.subscribe((d) => {
+      const e = d?.enforcement;
+      const milestones: { height: number, label: string, completedLabel: string }[] = [];
+      if (e) {
+        if (e.mandatoryWindow) {
+          milestones.push({ height: e.mandatoryWindow.start,
+            label: 'BIP-110 mandatory signaling', completedLabel: 'BIP-110 mandatory signaling has begun' });
+        }
+        if (e.lockInHeight != null) {
+          milestones.push({ height: e.lockInHeight,
+            label: 'BIP-110 lock-in', completedLabel: 'BIP-110 is locked in' });
+        }
+        if (e.activationHeight != null) {
+          milestones.push({ height: e.activationHeight,
+            label: 'BIP-110 activation', completedLabel: 'BIP-110 rules are now enforced' });
+        }
+        if (e.expiryHeight != null) {
+          milestones.push({ height: e.expiryHeight,
+            label: 'BIP-110 expiry', completedLabel: 'BIP-110 rules have expired' });
+        }
+      }
+      this.bip110Milestones = milestones;
+      this.cd.markForCheck();
+    });
+
     this.stateService.blocks$
       .subscribe((blocks: BlockExtended[]) => {
         this.countdown = 0;
@@ -147,6 +175,20 @@ export class StartComponent implements OnInit, AfterViewChecked, OnDestroy {
               this.countdown = diff;
               this.eventName = specialBlocks[sb].labelEvent;
             }
+          }
+        }
+
+        // BIP-110 milestones ride the same countdown machinery, but their heights come
+        // from the live deployment rather than a constant: activation moves if lock-in
+        // happens early, and the mandatory window disappears entirely in that case.
+        for (const milestone of this.bip110Milestones) {
+          const diff = milestone.height - block.height;
+          if (diff > 0 && diff <= 1008) {
+            this.countdown = diff;
+            this.eventName = milestone.label;
+          } else if (diff <= 0 && diff > -8) {
+            this.specialEvent = true;
+            this.eventName = milestone.completedLabel;
           }
         }
         for (const block of blocks) {
@@ -507,5 +549,6 @@ export class StartComponent implements OnInit, AfterViewChecked, OnDestroy {
     this.markBlockSubscription.unsubscribe();
     this.blockCounterSubscription.unsubscribe();
     this.resetScrollSubscription.unsubscribe();
+    this.bip110Subscription?.unsubscribe();
   }
 }

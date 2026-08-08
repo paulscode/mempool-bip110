@@ -27,8 +27,31 @@ export function setBIP110PulsePhase(phase: number): void {
   bip110PulsePhase = phase;
 }
 
+// Whether the graph should render BIP110 hits in the "actually invalid" palette.
+// Set from the enforcement context: this is a separate colour pipeline (WebGL sprite
+// tint) that no amount of SCSS work touches, so it needs its own switch.
+let bip110InvalidMode = false;
+export function setBIP110InvalidMode(invalid: boolean): void {
+  bip110InvalidMode = invalid;
+}
+export function getBIP110InvalidMode(): boolean {
+  return bip110InvalidMode;
+}
+
 // Get pulsing BIP110 color based on current phase
 export function getPulsingBIP110Color(): Color {
+  if (bip110InvalidMode) {
+    // Red palette: these transactions are invalid under consensus, not hypothetically.
+    // Same pulse shape as the amber version so the motion reads as one language.
+    const rawPulse = 0.5 + 0.5 * Math.sin(bip110PulsePhase);
+    const pulse = Math.pow(rawPulse, 5);
+    return {
+      r: 1.0,
+      g: 0.23 + 0.2 * pulse,
+      b: 0.19 + 0.15 * pulse,
+      a: 1
+    };
+  }
   // Pulse between neon orange and yellow-green (halfway to full green)
   const rawPulse = 0.5 + 0.5 * Math.sin(bip110PulsePhase);
   // Use power function to spend more time on orange (pulse=0) end

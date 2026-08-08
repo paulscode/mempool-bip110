@@ -14,6 +14,7 @@ export class Bip110DeploymentComponent implements OnInit {
   deployment$: Observable<Bip110DeploymentInfo>;
   isLoading$: Observable<boolean>;
   bip110ScanProgress$: Observable<number>;
+  scanLabel$: Observable<string>;
 
   signalingModalOpen = false;
 
@@ -26,6 +27,14 @@ export class Bip110DeploymentComponent implements OnInit {
     this.isLoading$ = this.stateService.isLoadingWebSocket$;
     this.bip110ScanProgress$ = this.stateService.loadingIndicators$.pipe(
       map(indicators => indicators['bip110-scan'] !== undefined ? indicators['bip110-scan'] : -1)
+    );
+    // Same scan, different meaning either side of activation: before, it is building the
+    // historical "would have violated" picture; after, it is checking the chain against
+    // rules that are actually in force.
+    this.scanLabel$ = this.deployment$.pipe(
+      map(d => (d?.state === 'active' || d?.state === 'expired')
+        ? 'Verifying blocks against BIP-110 rules'
+        : 'Analysing historical blocks for BIP-110 data')
     );
   }
 

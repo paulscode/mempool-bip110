@@ -1,5 +1,10 @@
 # Mempool BIP110 🔍
 
+> **Retired.** BIP-110 was a temporary soft fork, and the period this project was built to
+> visualise has passed. It is no longer maintained and has been removed from the Start9 and
+> Umbrel app stores. Installed copies will receive no further updates. For a block explorer,
+> use the official Mempool app, or Mempool Pruned on a pruned node.
+
 > A fork of [Mempool](https://mempool.space/) (v3.2.1) that visualizes **BIP110 (Reduced Data Temporary Softfork)** miner signaling and transaction rule violations in real time.
 
 ---
